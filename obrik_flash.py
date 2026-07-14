@@ -563,6 +563,38 @@ def step_load_params(cfg):
     nsh_send(m, "param save", timeout_s=5)
     time.sleep(3)
 
+    # верификация критических параметров
+    print("  проверка критических параметров...")
+    critical = {pname for pname, _ in params_to_set if pname in (
+        "BAT1_N_CELLS", "BAT1_V_DIV", "EKF2_OF_CTRL",
+        "SENS_FLOW_MAXHGT", "COM_ARM_BAT_MIN", "SYS_AUTOSTART",
+    )}
+    verified = 0
+    for pname in sorted(critical):
+        got = None
+        try:
+            msg = m.recv_match(type='PARAM_VALUE', blocking=True, timeout=2)
+            # PX4 doesn't always respond to request; read from stream
+            # Try explicit fetch
+            m.mav.param_request_read_send(1, 1, pname.encode().ljust(16, b'\x00'), -1)
+            t0 = time.time()
+            while time.time() - t0 < 2:
+                msg = m.recv_match(type='PARAM_VALUE', blocking=True, timeout=1)
+                if msg and msg.param_id.rstrip('\x00') == pname:
+                    got = msg.param_value
+                    break
+        except Exception:
+            pass
+        if got is not None:
+            expected = next((v for n, v in params_to_set if n == pname), None)
+            if expected is not None and abs(got - expected) < 1e-4:
+                print(f"    ✓ {pname} = {got}")
+                verified += 1
+            else:
+                print(f"    ⚠ {pname} = {got} (ожид: {expected})")
+        else:
+            print(f"    ? {pname} — не удалось прочитать")
+
     m.close()
 
     if failed == 0:
@@ -571,6 +603,64 @@ def step_load_params(cfg):
         print(f"  ⚠ {sent} отправлено, {failed} пропущено")
     print("  >>> ОТКЛЮЧИТЕ полётник от питания и подключите заново (перезагрузка). <<<")
     return True
+
+
+# ── dry-run ─────────────────────────────────────────────────────────────
+
+def dry_run_checks(cfg):
+    """Проверить файлы и зависимости, не выполняя прошивку."""
+    print("=" * 60)
+    print("DRY-RUN — проверка файлов и зависимостей")
+    print("=" * 60)
+    ok = True
+
+    checks = [
+        ("bootloader", cfg.get("bootloader", "")),
+        ("firmware", cfg.get("firmware", "")),
+        ("params_file", cfg.get("params_file", "")),
+    ]
+    for name, path in checks:
+        if not path:
+            print(f"  ✗ {name}: не указан в конфиге")
+            ok = False
+        elif os.path.exists(path):
+            size = os.path.getsize(path)
+            print(f"  ✓ {name}: {path} ({size:,} B)")
+        else:
+            print(f"  ✗ {name}: ФАЙЛ НЕ НАЙДЕН — {path}")
+            ok = False
+
+    tools_dir = cfg.get("px4_tools", "")
+    if not tools_dir or not os.path.isdir(tools_dir):
+        print(f"  ✗ px4_tools: директория не найдена — {tools_dir}")
+        ok = False
+    else:
+        for tool in ["px_uploader.py", "mavlink_shell.py"]:
+            tp = os.path.join(tools_dir, tool)
+            if os.path.exists(tp):
+                print(f"  ✓ {tool}: {tp}")
+            else:
+                print(f"  ✗ {tool}: не найден в {tools_dir}")
+                ok = False
+
+    import shutil
+    for dep in ["dfu-util", "arm-none-eabi-gcc"]:
+        if shutil.which(dep):
+            print(f"  ✓ {dep}: {shutil.which(dep)}")
+        else:
+            print(f"  ✗ {dep}: не установлен")
+            ok = False
+
+    for mod in [("pymavlink", "mavutil"), ("serial", None)]:
+        try:
+            __import__(mod[0])
+            print(f"  ✓ python-{mod[0]}: OK")
+        except ImportError:
+            print(f"  ✗ python-{mod[0]}: не установлен (pip install {mod[0]})")
+            ok = False
+
+    print(f"\n  итог dry-run: {'✓ всё OK' if ok else '✗ есть проблемы'}")
+    return ok
 
 
 # ── main ───────────────────────────────────────────────────────────────
@@ -584,6 +674,8 @@ def main():
                         help="какие шаги выполнить: 1=загрузчик, 2=прошивка, 3=параметры, 4=beacon, либо 'beacon', 'fw', 'params', 'all'")
     parser.add_argument("--list", action="store_true",
                         help="показать текущий конфиг и выйти")
+    parser.add_argument("--dry-run", action="store_true",
+                        help="проверить файлы и зависимости без прошивки")
     args = parser.parse_args()
 
     cfg = load_config(args.config)
@@ -592,6 +684,10 @@ def main():
         print("Текущий конфиг:")
         for k in sorted(cfg):
             print(f"  {k} = {cfg[k]}")
+        return
+
+    if args.dry_run:
+        dry_run_checks(cfg)
         return
 
     # разобрать --steps
