@@ -7,13 +7,16 @@
 ## Установка
 
 ```bash
-# 1. Клонировать
-git clone https://github.com/KVALNF95/obrik-tools.git ~/obrik-tools
+# 1. Клонировать в любое удобное место
+git clone https://github.com/KVALNF95/obrik-tools.git
+cd obrik-tools
 
 # 2. Установить зависимости
-cd ~/obrik-tools && bash setup.sh
+bash setup.sh
 
 # 3. Перезагрузить систему (чтобы права dialout применились)
+# Войти заново — и можно работать из этой же папки:
+python3 obrik_flash.py -c obrik_flash.cfg --steps all
 ```
 
 ## Конфигурация
@@ -30,18 +33,20 @@ params_file  = /home/ИМЯ/Documents/projects-sverk/params/Optical_flow.params
 
 ## Запуск
 
+Из папки, куда клонировали репозиторий:
+
 ```bash
 # Всё сразу (загрузчик → прошивка → beacon → параметры):
-python3 ~/obrik-tools/obrik_flash.py -c ~/obrik-tools/obrik_flash.cfg --steps all
+python3 obrik_flash.py -c obrik_flash.cfg --steps all
 
 # Только прошивка:
-python3 ~/obrik-tools/obrik_flash.py -c ~/obrik-tools/obrik_flash.cfg --steps 1,2
+python3 obrik_flash.py -c obrik_flash.cfg --steps 1,2
 
 # Только beacon + параметры (когда прошивка уже стоит):
-python3 ~/obrik-tools/obrik_flash.py -c ~/obrik-tools/obrik_flash.cfg --steps 3,4
+python3 obrik_flash.py -c obrik_flash.cfg --steps 3,4
 
 # Посмотреть конфиг:
-python3 ~/obrik-tools/obrik_flash.py -c ~/obrik-tools/obrik_flash.cfg --list
+python3 obrik_flash.py -c obrik_flash.cfg --list
 ```
 
 ## Шаги
