@@ -70,6 +70,14 @@ def prompt_yesno(msg, default="y"):
 
 def load_config(path):
     cfg = dict(DEFAULT_CONFIG)
+    if not path:
+        # auto-detect: сначала рядом со скриптом, потом в текущей папке
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        for d in [script_dir, os.getcwd()]:
+            candidate = os.path.join(d, "obrik_flash.cfg")
+            if os.path.exists(candidate):
+                path = candidate
+                break
     if path and os.path.exists(path):
         with open(path) as f:
             for line in f:
@@ -303,6 +311,10 @@ def step_beacon_delay(cfg):
     print("  Требуется подключённый АКБ (регуляторы должны быть под питанием).")
     print("  Полётник должен быть подключён по USB (питание).")
     print("  Закройте QGroundControl (если открыт).")
+
+    if not prompt_yesno("  Пропустить шаг 4 (beacon уже настроен)?"):
+        return True
+
     input("  Нажмите Enter, когда АКБ и USB подключены...")
 
     subprocess.run("pkill -9 -f QGroundControl 2>/dev/null", shell=True)
@@ -482,6 +494,10 @@ def step_load_params(cfg):
     print(f"  Файл параметров: {params}")
     print("  Полётник должен быть подключён по USB.")
     print("  Закройте QGroundControl (если открыт).")
+
+    if not prompt_yesno("  Пропустить шаг 3 (параметры уже загружены)?"):
+        return True
+
     input("  Нажмите Enter, когда готово...")
 
     subprocess.run("pkill -9 -f QGroundControl 2>/dev/null", shell=True)
@@ -669,7 +685,7 @@ def main():
     parser = argparse.ArgumentParser(
         description="obrik_flash — прошивка и настройка дрона одной командой")
     parser.add_argument("--config", "-c", default=None,
-                        help="путь к конфиг-файлу (по умолчанию встроенные пути)")
+                        help="путь к конфиг-файлу (по умолчанию ищет obrik_flash.cfg рядом со скриптом)")
     parser.add_argument("--steps", "-s", default="1,2,3,4",
                         help="какие шаги выполнить: 1=загрузчик, 2=прошивка, 3=параметры, 4=beacon, либо 'beacon', 'fw', 'params', 'all'")
     parser.add_argument("--list", action="store_true",
