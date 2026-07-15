@@ -16,7 +16,7 @@ bash setup.sh
 
 # 3. Перезагрузить систему (чтобы права dialout применились)
 # Войти заново — и можно работать из этой же папки:
-python3 obrik_flash.py -c obrik_flash.cfg --steps all
+python3 obrik_flash.py --steps all
 ```
 
 ## Конфигурация
@@ -35,26 +35,29 @@ px4_tools    = /путь/к/px4/Tools
 Из папки, куда клонировали репозиторий:
 
 ```bash
+# Конфиг ищется автоматически (obrik_flash.cfg рядом со скриптом),
+# но можно указать явно: -c /путь/к/конфигу.cfg
+
 # Всё сразу (загрузчик → прошивка → параметры → beacon):
-python3 obrik_flash.py -c obrik_flash.cfg --steps all
+python3 obrik_flash.py --steps all
 
 # Только прошивка:
-python3 obrik_flash.py -c obrik_flash.cfg --steps 1,2
+python3 obrik_flash.py --steps 1,2
 
 # Только параметры + beacon (прошивка уже стоит):
-python3 obrik_flash.py -c obrik_flash.cfg --steps 3,4
+python3 obrik_flash.py --steps 3,4
 
 # Только параметры:
-python3 obrik_flash.py -c obrik_flash.cfg --steps params
+python3 obrik_flash.py --steps params
 
 # Только beacon:
-python3 obrik_flash.py -c obrik_flash.cfg --steps beacon
+python3 obrik_flash.py --steps beacon
 
 # Проверить файлы и зависимости без прошивки:
-python3 obrik_flash.py -c obrik_flash.cfg --dry-run
+python3 obrik_flash.py --dry-run
 
 # Посмотреть конфиг:
-python3 obrik_flash.py -c obrik_flash.cfg --list
+python3 obrik_flash.py --list
 ```
 
 ## Шаги
