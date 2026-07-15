@@ -287,7 +287,10 @@ def step_flash_firmware(cfg):
     result = subprocess.run(cmd, shell=True, timeout=120,
                             capture_output=True, text=True)
     print(result.stdout)
-    if result.returncode == 0 and "Rebooting" in result.stdout:
+    if result.stderr:
+        print(result.stderr)
+    combined = result.stdout + result.stderr
+    if result.returncode == 0 and ("Reboot" in combined or "Success" in combined or "done" in combined.lower()):
         print("  ✓ прошивка залита — полётник перезагружается")
     else:
         print(f"  [ОШИБКА] px_uploader завершился с кодом {result.returncode}")
