@@ -312,7 +312,7 @@ def step_beacon_delay(cfg):
     print("  Полётник должен быть подключён по USB (питание).")
     print("  Закройте QGroundControl (если открыт).")
 
-    if not prompt_yesno("  Пропустить шаг 4 (beacon уже настроен)?"):
+    if prompt_yesno("  Пропустить шаг 4 (beacon уже настроен)?"):
         return True
 
     input("  Нажмите Enter, когда АКБ и USB подключены...")
@@ -495,7 +495,7 @@ def step_load_params(cfg):
     print("  Полётник должен быть подключён по USB.")
     print("  Закройте QGroundControl (если открыт).")
 
-    if not prompt_yesno("  Пропустить шаг 3 (параметры уже загружены)?"):
+    if prompt_yesno("  Пропустить шаг 3 (параметры уже загружены)?"):
         return True
 
     input("  Нажмите Enter, когда готово...")
