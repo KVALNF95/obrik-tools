@@ -3,17 +3,23 @@
 obrik_flash.py — утилита одной командой для прошивки и настройки дрона «Обрик».
 
 Что делает:
+  0. Mass-erase (DFU) — полное стирание flash (для проблемных плат)
   1. Прошивает загрузчик (DFU) — требуется нажать кнопку BOOT
-  2. Прошивает основную прошивку PX4 (px_uploader)
+  2. Прошивает основную прошивку PX4 (DFU или px_uploader)
   3. Загружает параметры в полётник (через MAVLink param_set)
   4. Записывает Beacon Delay = Infinite во все ESC (требуется АКБ)
+
+Шаг 2 автоматически выбирает способ прошивки:
+  - Если плата в DFU — прошивает .bin напрямую через dfu-util
+  - Если плата запущена — использует px_uploader.py (старый метод)
 
 Использование:
   python3 obrik_flash.py                     # с конфигом по умолчанию
   python3 obrik_flash.py --config my.cfg     # с указанным конфигом
-   python3 obrik_flash.py --steps 1,2         # только прошивка
-   python3 obrik_flash.py --steps beacon       # только отключение писка
-   python3 obrik_flash.py --steps params       # только загрузка параметров
+  python3 obrik_flash.py --steps 1,2         # только прошивка
+  python3 obrik_flash.py --steps beacon      # только отключение писка
+  python3 obrik_flash.py --steps params      # только загрузка параметров
+  python3 obrik_flash.py --steps erase       # только mass-erase
 
 Конфиг-файл (obrik_flash.cfg) — формат key=value, см. пример внизу.
 """
@@ -24,9 +30,11 @@ import os, sys, time, re, glob, subprocess, argparse
 DEFAULT_CONFIG = {
     "bootloader":   "",
     "firmware":     "",
+    "firmware_bin": "",
     "params_file":  "",
     "px4_tools":    "",
     "dfu_address":  "0x08000000",
+    "app_address":  "0x08020000",
     "baud":         "57600",
     "beacon_value": "5",
     "num_motors":   "4",
@@ -169,6 +177,44 @@ def nsh_send(m, cmd, timeout_s=6):
 
 # ── шаги ──────────────────────────────────────────────────────────────
 
+def step_mass_erase(cfg):
+    """Шаг 0: mass-erase всей flash (требуется DFU-режим).
+
+    Стирает ВСЁ — и загрузчик, и прошивку. Нужен когда плата не перепрошивается
+    обычным способом (например, при заводском ArduPilot).
+    После mass-erase обязательно прошить загрузчик и прошивку заново.
+    """
+    print("\n" + "=" * 60)
+    print("ШАГ 0 — mass-erase (полное стирание flash)")
+    print("=" * 60)
+    print("  ВНИМАНИЕ: стирается ВСЯ flash, включая загрузчик.")
+    print("  После этого шага нужно заново прошить и загрузчик, и PX4.")
+
+    state = detect_board_state()
+    if state != "dfu":
+        print("  Плата не в режиме DFU.")
+        print("  >>> Зажмите BOOT, подключите USB, отпустите BOOT. <<<")
+        input("  Нажмите Enter, когда готово...")
+        state = detect_board_state()
+        if state != "dfu":
+            print("[ОШИБКА] DFU устройство не обнаружено.")
+            return False
+
+    print("  выполняю mass-erase...")
+    result = subprocess.run(
+        'dfu-util -a 0 -s 0x08000000:mass-erase:force -D /tmp/obrik_empty.bin',
+        shell=True, timeout=60
+    )
+    if result.returncode == 0:
+        print("  ✓ mass-erase завершён")
+        print("  Плата в режиме DFU — можно прошивать загрузчик и PX4.")
+    else:
+        print(f"  [ОШИБКА] mass-erase завершился с кодом {result.returncode}")
+        return False
+
+    return True
+
+
 def step_flash_bootloader(cfg):
     """Шаг 1: прошить загрузчик через DFU."""
     bl = cfg["bootloader"]
@@ -212,24 +258,24 @@ def step_flash_bootloader(cfg):
     print(f"  прошиваю загрузчик → {addr} из {bl}")
     result = subprocess.run(
         f'dfu-util -a 0 --dfuse-address {addr} -D "{bl}"',
-        shell=True, capture_output=True, text=True
+        shell=True
     )
-    print(result.stdout)
-    if result.returncode == 0 and "success" in result.stdout.lower():
+    if result.returncode == 0:
         print("  ✓ загрузчик прошит")
-        print("\n  >>> ОТКЛЮЧИТЕ полётник от USB перед следующим шагом. <<<")
+        print("  Плата остаётся в режиме DFU — можно сразу прошивать PX4 (шаг 2).")
     else:
         print(f"  [ОШИБКА] dfu-util завершился с кодом {result.returncode}")
-        print(result.stderr)
         return False
 
     return True
 
 
 def step_flash_firmware(cfg):
-    """Шаг 2: прошить основную прошивку."""
+    """Шаг 2: прошить основную прошивку (DFU или px_uploader)."""
     fw = cfg["firmware"]
     tools = cfg["px4_tools"]
+    app_addr = cfg.get("app_address", "0x08020000")
+
     if not os.path.exists(fw):
         print(f"[ОШИБКА] прошивка не найдена: {fw}")
         return False
@@ -238,18 +284,43 @@ def step_flash_firmware(cfg):
     print("ШАГ 2 — прошивка PX4")
     print("=" * 60)
 
-    # проверяем, подключена ли плата
     state = detect_board_state()
+
+    # ── DFU-режим: прошиваем .bin напрямую через dfu-util ──
+    if state == "dfu":
+        print("  Плата в режиме DFU — прошиваю напрямую через dfu-util.")
+        fw_bin = cfg.get("firmware_bin", "")
+        if not fw_bin:
+            fw_bin = fw.replace(".px4", ".bin")
+        if not os.path.exists(fw_bin):
+            print(f"[ОШИБКА] .bin прошивка не найдена: {fw_bin}")
+            print(f"  Укажите firmware_bin в конфиге или положите .bin рядом с .px4.")
+            return False
+
+        print(f"  прошиваю: {fw_bin}")
+        print(f"  адрес: {app_addr}")
+        cmd = f'dfu-util -a 0 --dfuse-address {app_addr} -D "{fw_bin}"'
+        result = subprocess.run(cmd, shell=True, timeout=300)
+        if result.returncode == 0:
+            print("  ✓ прошивка залита")
+            print("\n  >>> ОТКЛЮЧИТЕ USB, затем подключите заново БЕЗ BOOT. <<<")
+            print("  >>> Плата загрузится в PX4. <<<")
+            return True
+        else:
+            print(f"  [ОШИБКА] dfu-util завершился с кодом {result.returncode}")
+            return False
+
+    # ── Нет платы ──
     if state == "none":
         print("  Плата не обнаружена.")
         print("  >>> Подключите полётник по USB (кнопку BOOT НЕ нажимать).")
-    elif state == "dfu":
-        print("  Плата в режиме DFU. Перезагрузите её:")
-        print("  >>> ОТКЛЮЧИТЕ USB, затем подключите заново (без BOOT).")
-    else:
-        print("  Плата подключена и работает.")
-        if prompt_yesno("  Прошивка уже установлена. Пропустить шаг 2?"):
-            return True
+        print("  >>> Или запустите с BOOT для прошивки через DFU после загрузчика.")
+        return False
+
+    # ── Плата запущена (running): старый метод через px_uploader ──
+    print("  Плата подключена и работает.")
+    if prompt_yesno("  Прошивка уже установлена. Пропустить шаг 2?"):
+        return True
 
     print("  Закройте QGroundControl (если открыт).")
     input("  Нажмите Enter, когда готово...")
@@ -259,7 +330,6 @@ def step_flash_firmware(cfg):
         print("[ОШИБКА] полётник не обнаружен.")
         return False
 
-    # убить QGC если открыт (чтобы не перехватывал порт)
     subprocess.run("pkill -9 -f QGroundControl 2>/dev/null", shell=True)
     time.sleep(1)
 
@@ -615,6 +685,7 @@ def dry_run_checks(cfg):
     checks = [
         ("bootloader", cfg.get("bootloader", "")),
         ("firmware", cfg.get("firmware", "")),
+        ("firmware_bin", cfg.get("firmware_bin", "") or cfg.get("firmware", "").replace(".px4", ".bin")),
         ("params_file", cfg.get("params_file", "")),
     ]
     for name, path in checks:
@@ -669,7 +740,7 @@ def main():
     parser.add_argument("--config", "-c", default=None,
                         help="путь к конфиг-файлу (по умолчанию ищет obrik_flash.cfg рядом со скриптом)")
     parser.add_argument("--steps", "-s", default="1,2,3,4",
-                        help="какие шаги выполнить: 1=загрузчик, 2=прошивка, 3=параметры, 4=beacon, либо 'beacon', 'fw', 'params', 'all'")
+                        help="шаги: 0=erase, 1=загрузчик, 2=прошивка, 3=параметры, 4=beacon. Или: all, fw, erase, beacon, params")
     parser.add_argument("--list", action="store_true",
                         help="показать текущий конфиг и выйти")
     parser.add_argument("--dry-run", action="store_true",
@@ -688,6 +759,10 @@ def main():
         dry_run_checks(cfg)
         return
 
+    # создать пустой файл для mass-erase (нужен dfu-util для запуска)
+    subprocess.run("dd if=/dev/zero of=/tmp/obrik_empty.bin bs=1 count=1 2>/dev/null",
+                   shell=True)
+
     # разобрать --steps
     steps = args.steps.lower()
     if steps == "all":
@@ -698,6 +773,8 @@ def main():
         do = {4}
     elif steps == "params":
         do = {3}
+    elif steps == "erase":
+        do = {0}
     else:
         do = set()
         for s in steps.split(","):
@@ -709,7 +786,9 @@ def main():
     results = {}
 
     for step_num in sorted(do):
-        if step_num == 1:
+        if step_num == 0:
+            results[0] = step_mass_erase(cfg)
+        elif step_num == 1:
             results[1] = step_flash_bootloader(cfg)
         elif step_num == 2:
             results[2] = step_flash_firmware(cfg)
@@ -735,7 +814,7 @@ def main():
 
     print("\n" + "=" * 60)
     print("ИТОГ")
-    names = {1: "загрузчик", 2: "прошивка", 3: "параметры", 4: "Beacon Delay"}
+    names = {0: "mass-erase", 1: "загрузчик", 2: "прошивка", 3: "параметры", 4: "Beacon Delay"}
     all_ok = True
     for step_num in sorted(do):
         r = results.get(step_num, "пропущен")
