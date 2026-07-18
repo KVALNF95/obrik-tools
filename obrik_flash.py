@@ -65,13 +65,17 @@ def detect_board_state():
 
 
 def prompt_yesno(msg, default="n"):
-    """Спросить y/n, вернуть True если да. По Enter — нет (не пропускать)."""
+    """Спросить, вернуть True если пропустить (skip). Enter = не пропускать."""
     try:
         d = "Y" if default == "y" else "N"
-        ans = input(f"  {msg} [{d}]: ").strip().lower()
+        hint = "Enter=выполнить, s=пропустить" if d == "N" else "Enter=пропустить, s=выполнить"
+        ans = input(f"  {msg} [{hint}]: ").strip().lower()
         if not ans:
             ans = default
-        return ans in ("y", "yes", "да", "д")
+        if d == "N":
+            return ans == "s"
+        else:
+            return ans != "s"
     except EOFError:
         return default == "y"
 
