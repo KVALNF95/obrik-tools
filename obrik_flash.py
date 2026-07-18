@@ -236,7 +236,7 @@ def step_flash_bootloader(cfg):
     if state == "running":
         print("  Плата уже запущена с прошивкой (ttyACM найден).")
         print("  Для прошивки загрузчика плата должна быть в режиме DFU.")
-        if not prompt_yesno("  Пропустить шаг 1 (загрузчик уже прошит)?"):
+        if not prompt_yesno("  Выполнить шаг 1 — прошивка загрузчика (DFU)?"):
             print("  >>> ОТКЛЮЧИТЕ плату от USB.")
             print("  >>> Зажмите BOOT, подключите USB, отпустите BOOT.")
             print("  >>> Запустите этот скрипт заново.")
@@ -329,7 +329,7 @@ def step_flash_firmware(cfg):
 
     # ── Плата запущена (running): старый метод через px_uploader ──
     print("  Плата подключена и работает.")
-    if prompt_yesno("  Прошивка уже установлена. Пропустить шаг 2?"):
+    if prompt_yesno("  Выполнить шаг 2 — прошить PX4?"):
         return True
 
     print("  Закройте QGroundControl (если открыт).")
@@ -382,7 +382,7 @@ def step_beacon_delay(cfg):
     print("  Полётник должен быть подключён по USB (питание).")
     print("  Закройте QGroundControl (если открыт).")
 
-    if prompt_yesno("  Пропустить шаг 4 (beacon уже настроен)?"):
+    if prompt_yesno("  Выполнить шаг 4 — отключение писка ESC (beacon)?"):
         return True
 
     input("  Нажмите Enter, когда АКБ и USB подключены...")
@@ -565,7 +565,7 @@ def step_load_params(cfg):
     print("  Полётник должен быть подключён по USB.")
     print("  Закройте QGroundControl (если открыт).")
 
-    if prompt_yesno("  Пропустить шаг 3 (параметры уже загружены)?"):
+    if prompt_yesno("  Выполнить шаг 3 — загрузка параметров?"):
         return True
 
     input("  Нажмите Enter, когда готово...")
