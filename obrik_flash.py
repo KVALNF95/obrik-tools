@@ -64,8 +64,8 @@ def detect_board_state():
     return "none"
 
 
-def prompt_yesno(msg, default="y"):
-    """Спросить y/n, вернуть True если да."""
+def prompt_yesno(msg, default="n"):
+    """Спросить y/n, вернуть True если да. По Enter — нет (не пропускать)."""
     try:
         d = "Y" if default == "y" else "N"
         ans = input(f"  {msg} [{d}]: ").strip().lower()
