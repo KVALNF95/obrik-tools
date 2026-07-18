@@ -64,21 +64,6 @@ def detect_board_state():
     return "none"
 
 
-def prompt_yesno(msg, default="n"):
-    """Спросить, вернуть True если пропустить (skip). Enter = не пропускать."""
-    try:
-        d = "Y" if default == "y" else "N"
-        hint = "Enter=выполнить, s=пропустить" if d == "N" else "Enter=пропустить, s=выполнить"
-        ans = input(f"  {msg} [{hint}]: ").strip().lower()
-        if not ans:
-            ans = default
-        if d == "N":
-            return ans == "s"
-        else:
-            return ans != "s"
-    except EOFError:
-        return default == "y"
-
 def load_config(path):
     cfg = dict(DEFAULT_CONFIG)
     if not path:
@@ -235,12 +220,8 @@ def step_flash_bootloader(cfg):
     state = detect_board_state()
     if state == "running":
         print("  Плата уже запущена с прошивкой (ttyACM найден).")
-        print("  Для прошивки загрузчика плата должна быть в режиме DFU.")
-        if not prompt_yesno("  Выполнить шаг 1 — прошивка загрузчика (DFU)?"):
-            print("  >>> ОТКЛЮЧИТЕ плату от USB.")
-            print("  >>> Зажмите BOOT, подключите USB, отпустите BOOT.")
-            print("  >>> Запустите этот скрипт заново.")
-        return True  # пропускаем — загрузчик уже стоит
+        print("  Загрузчик уже прошит — шаг 1 пропускается.")
+        return True
 
     if state == "none":
         print("  Плата не обнаружена.")
@@ -329,9 +310,6 @@ def step_flash_firmware(cfg):
 
     # ── Плата запущена (running): старый метод через px_uploader ──
     print("  Плата подключена и работает.")
-    if prompt_yesno("  Выполнить шаг 2 — прошить PX4?"):
-        return True
-
     print("  Закройте QGroundControl (если открыт).")
     input("  Нажмите Enter, когда готово...")
 
@@ -381,9 +359,6 @@ def step_beacon_delay(cfg):
     print("  Требуется подключённый АКБ (регуляторы должны быть под питанием).")
     print("  Полётник должен быть подключён по USB (питание).")
     print("  Закройте QGroundControl (если открыт).")
-
-    if prompt_yesno("  Выполнить шаг 4 — отключение писка ESC (beacon)?"):
-        return True
 
     input("  Нажмите Enter, когда АКБ и USB подключены...")
 
@@ -564,9 +539,6 @@ def step_load_params(cfg):
     print(f"  Файл параметров: {params}")
     print("  Полётник должен быть подключён по USB.")
     print("  Закройте QGroundControl (если открыт).")
-
-    if prompt_yesno("  Выполнить шаг 3 — загрузка параметров?"):
-        return True
 
     input("  Нажмите Enter, когда готово...")
 
