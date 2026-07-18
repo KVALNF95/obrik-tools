@@ -305,6 +305,12 @@ def step_flash_firmware(cfg):
             print("  ✓ прошивка залита")
             print("\n  >>> ОТКЛЮЧИТЕ USB, затем подключите заново БЕЗ BOOT. <<<")
             print("  >>> Плата загрузится в PX4. <<<")
+            input("  Нажмите Enter, когда плата переподключена и загрузилась...")
+            port = wait_port(30)
+            if port:
+                print(f"  ✓ плата доступна на {port}")
+            else:
+                print("  ? плата не обнаружена — проверьте подключение USB")
             return True
         else:
             print(f"  [ОШИБКА] dfu-util завершился с кодом {result.returncode}")
