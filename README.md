@@ -11,13 +11,27 @@
 git clone https://github.com/KVALNF95/obrik-tools.git
 cd obrik-tools
 
-# 2. Установить зависимости
+# 2. Установить зависимости (Linux/macOS)
 bash setup.sh
 
 # 3. Перезагрузить систему (чтобы права dialout применились)
 # Войти заново — и можно работать из этой же папки:
 python3 obrik_flash.py --steps all
 ```
+
+Windows PowerShell:
+
+```powershell
+git clone https://github.com/KVALNF95/obrik-tools.git
+cd obrik-tools
+Set-ExecutionPolicy -Scope Process Bypass
+.\setup.ps1
+.\.venv\Scripts\python.exe .\obrik_flash.py --steps all
+```
+
+Для DFU-этапов на Windows нужен `dfu-util.exe` в `PATH`. USB-порт PX4
+определяется через `pyserial` (`COMx`), QGroundControl закрывается через
+`taskkill`.
 
 ## Конфигурация
 
@@ -75,7 +89,7 @@ python3 obrik_flash.py --list
 | 0 | Mass-erase (полное стирание flash) | Кнопка BOOT | Зажать BOOT, подключить USB |
 | 1 | Прошивка загрузчика (DFU) | Кнопка BOOT | Зажать BOOT, подключить USB |
 | 2 | Прошивка PX4 (DFU или px_uploader) | USB / BOOT | Авто: DFU если плата в DFU, иначе px_uploader |
-| 3 | Параметры (MAVLink param_set) | USB | Автомат, с верификацией критических параметров |
+| 3 | Параметры (MAVLink param_set) | USB + доступное хранилище параметров | ACK каждого параметра, `param save`, reboot и повторное чтение |
 | 4 | Beacon Delay = Infinite | **АКБ** + USB | Beacon пишется в ESC, авто-повторы при ошибке |
 
 **Шаг 2** автоматически выбирает способ прошивки:
@@ -86,7 +100,7 @@ python3 obrik_flash.py --list
 
 ## Требования
 
-- ОС: Ubuntu 22.04+ (или любой Linux с Python 3 и dfu-util)
+- ОС: Windows 10/11, Ubuntu 22.04+ или macOS с Python 3 и dfu-util
 - Полётник: Matek H743-Slim
 - Прошивка: PX4 v1.15.4 с драйвером `dshot_4way`
 - Регуляторы: BLHeli_S / Bluejay на SiLabs EFM8
@@ -97,5 +111,6 @@ python3 obrik_flash.py --list
 - При прошивке через DFU (шаг 2 после шага 1) QGroundControl не мешает.
 - **Если плата из коробки с ArduPilot** (USB ID `1209:5740`, в `lsusb` строка `ArduPilot`) — выполните `--steps erase,1,2` для полной перепрошивки.
 - Beacon пишется в ESC с авто-повторами (до 3 попыток при `no bootloader response`).
-- Проверка АКБ — предупреждение, не блокировка (скрипт продолжит даже без батареи).
-- Заливка параметров (шаг 3) — автомат через MAVLink `param_set` + `param save`, с проверкой критических параметров. После неё **обязательно перезагрузите дрон** (отключите и подключите питание).
+- Проверка АКБ блокирует шаг 4 при напряжении ниже 3 В: без питания ESC запись невозможна.
+- Шаг 3 понимает QGC/PX4-файлы вида `system component NAME VALUE TYPE`, сохраняет реальные типы `INT32/REAL32`, ждёт ACK каждого значения и сам проверяет критические параметры после reboot.
+- Перед загрузкой параметров проверяется реальный результат `param save`. Если прошивка хранит параметры в `/fs/microsd/params`, отсутствующая/не смонтированная microSD будет показана как ошибка до загрузки.
