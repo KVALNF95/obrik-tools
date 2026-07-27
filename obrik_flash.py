@@ -24,15 +24,19 @@ obrik_flash.py — утилита одной командой для проши�
 Конфиг-файл (obrik_flash.cfg) — формат key=value, см. пример внизу.
 """
 
-import os, sys, time, re, glob, subprocess, argparse
+import os, sys, time, re, glob, subprocess, argparse, json
 
-# ── конфиг по умолчанию ──────────────────────────────────────────────
+# каталог скрипта — вложенные ресурсы (firmware/, params/, tools/) ищем
+# рядом с ним, чтобы утилита работала из распакованной зипки без PX4-checkout
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# ── конфиг по умолчанию (пути — к вложенным ресурсам рядом со скриптом) ─
 DEFAULT_CONFIG = {
-    "bootloader":   "",
-    "firmware":     "",
-    "firmware_bin": "",
-    "params_file":  "",
-    "px4_tools":    "",
+    "bootloader":   os.path.join(SCRIPT_DIR, "firmware", "matek_h743-slim_bootloader.bin"),
+    "firmware":     os.path.join(SCRIPT_DIR, "firmware", "matek_h743-slim_default.px4"),
+    "firmware_bin": os.path.join(SCRIPT_DIR, "firmware", "matek_h743-slim_default.bin"),
+    "params_file":  os.path.join(SCRIPT_DIR, "params", "obrik_last.params"),
+    "px4_tools":    os.path.join(SCRIPT_DIR, "tools"),
     "dfu_address":  "0x08000000",
     "app_address":  "0x08020000",
     "baud":         "57600",
@@ -83,6 +87,11 @@ def load_config(path):
                 if "=" in line:
                     k, v = line.split("=", 1)
                     cfg[k.strip()] = os.path.expanduser(v.strip())
+    # относительные пути резолвим от папки скрипта (работа из зипки)
+    for k in ("bootloader", "firmware", "firmware_bin", "params_file", "px4_tools"):
+        v = cfg.get(k, "")
+        if v and not os.path.isabs(v):
+            cfg[k] = os.path.normpath(os.path.join(SCRIPT_DIR, v))
     return cfg
 
 
@@ -164,6 +173,152 @@ def nsh_send(m, cmd, timeout_s=6):
     return out.decode("ascii", "replace")
 
 
+# ── верификация ──────────────────────────────────────────────────────
+
+def _dfu_upload(addr, nbytes):
+    """Прочитать nbytes из flash по адресу через dfu-util. Вернуть bytes|None."""
+    import tempfile
+    tmp = tempfile.NamedTemporaryFile(prefix="obrik_dfu_", suffix=".bin", delete=False)
+    tmp.close()
+    try:
+        cmd = f'dfu-util -a 0 --dfuse-address {addr}:{nbytes} -U "{tmp.name}"'
+        r = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+        if r.returncode != 0 or not os.path.exists(tmp.name):
+            return None
+        with open(tmp.name, "rb") as f:
+            return f.read()
+    except Exception:
+        return None
+    finally:
+        try:
+            os.unlink(tmp.name)
+        except Exception:
+            pass
+
+
+def verify_dfu_write(addr, path):
+    """Прочитать flash обратно и сравнить с файлом.
+    True — совпало, False — НЕ совпало, None — readback невозможен."""
+    want = open(path, "rb").read()
+    got = _dfu_upload(addr, len(want))
+    if got is None or len(got) < len(want):
+        return None
+    return got[:len(want)] == want
+
+
+def verify_dfu_erased(addr, nbytes=4096):
+    """Проверить, что регион flash стёрт (все байты 0xFF).
+    True — стёрт, False — НЕ стёрт, None — readback невозможен."""
+    got = _dfu_upload(addr, nbytes)
+    if got is None or not got:
+        return None
+    return all(b == 0xFF for b in got)
+
+
+def parse_px4_git(fw_path):
+    """Достать git_identity/version из .px4 (JSON), либо None."""
+    try:
+        with open(fw_path) as f:
+            data = json.load(f)
+        return data.get("git_identity") or data.get("version")
+    except Exception:
+        return None
+
+
+def verify_firmware_running(cfg, fw_path, port=None):
+    """После прошивки подтвердить, что плата загрузилась в PX4.
+    Проверяет: порт вернулся → heartbeat → AUTOPILOT_VERSION (+сверка git)."""
+    try:
+        from pymavlink import mavutil
+    except ImportError:
+        print("  ⚠ pymavlink не установлен — проверяю только факт появления порта")
+        return wait_port(20) is not None
+
+    port = port or wait_port(20)
+    if not port:
+        print("  ✗ порт не появился после прошивки — плата не загрузилась")
+        return False
+    try:
+        m = mavutil.mavlink_connection(port, baud=int(cfg.get("baud", "57600")))
+    except Exception as e:
+        print(f"  ✗ не удалось открыть порт {port}: {e}")
+        return False
+
+    hb = m.wait_heartbeat(timeout=20)
+    if hb is None:
+        print("  ✗ нет heartbeat — PX4 не поднялся (возможен boot-loop)")
+        m.close()
+        return False
+    print("  ✓ heartbeat получен — PX4 запущен")
+
+    # запрос AUTOPILOT_VERSION (MAV_CMD_REQUEST_AUTOPILOT_CAPABILITIES = 520)
+    m.mav.command_long_send(m.target_system or 1, m.target_component or 1,
+                            520, 0, 1, 0, 0, 0, 0, 0, 0)
+    ver = m.recv_match(type='AUTOPILOT_VERSION', blocking=True, timeout=5)
+    running_git = None
+    if ver is not None:
+        try:
+            running_git = bytes(ver.flight_custom_version).split(b'\x00')[0]\
+                .decode('ascii', 'replace').strip()
+        except Exception:
+            running_git = None
+        print(f"  ✓ AUTOPILOT_VERSION получен (git на плате: {running_git or '?'})")
+    else:
+        print("  ⚠ AUTOPILOT_VERSION не пришёл, но heartbeat есть — считаю запуск успешным")
+    m.close()
+
+    # мягкая сверка git-хэша с образом (не блокирует — формат хэша PX4 капризный)
+    want_git = parse_px4_git(fw_path)
+    if running_git and want_git:
+        if running_git[:6] and running_git[:6] in want_git:
+            print(f"  ✓ git-хэш совпал с образом ({running_git})")
+        else:
+            print(f"  ⚠ git на плате ({running_git}) не найден в образе ({want_git}) —")
+            print("     убедитесь, что залит нужный .px4")
+    return True
+
+
+def set_param_verified(m, name, value, retries=3, timeout=0.5):
+    """Записать параметр и ПОДТВЕРДИТЬ чтением ответного PARAM_VALUE.
+    PX4 на каждый PARAM_SET отвечает PARAM_VALUE с фактическим значением.
+    Возврат: ('ok'|'mismatch'|'noresp'|'toolong', прочитанное_значение_или_None)."""
+    name_b = name.encode()
+    if len(name_b) > 16:
+        return ('toolong', None)
+    name_pad = name_b.ljust(16, b"\x00")
+    last = None
+
+    for _ in range(retries):
+        # выгрести старые PARAM_VALUE из очереди, чтобы не поймать чужой ответ
+        while m.recv_match(type='PARAM_VALUE', blocking=False):
+            pass
+        # REAL32 (9): PX4 сам приведёт значение к реальному типу параметра
+        m.mav.param_set_send(m.target_system or 1, m.target_component or 1,
+                             name_pad, float(value), 9)
+        t0 = time.time()
+        while time.time() - t0 < timeout:
+            msg = m.recv_match(type='PARAM_VALUE', blocking=True, timeout=timeout)
+            if msg is None:
+                break
+            pid = msg.param_id
+            if isinstance(pid, bytes):
+                pid = pid.split(b"\x00")[0].decode('ascii', 'replace')
+            pid = pid.rstrip("\x00")
+            if pid != name:
+                continue  # ответ на другой параметр — ждём дальше
+            last = msg.param_value
+            if msg.param_type in (9, 10):  # REAL32 / REAL64 — сравнение с допуском
+                if abs(msg.param_value - float(value)) <= max(1e-4, abs(float(value)) * 1e-4):
+                    return ('ok', msg.param_value)
+            else:  # целочисленные типы — сравнение по округлению
+                if round(msg.param_value) == round(float(value)):
+                    return ('ok', msg.param_value)
+            break  # значение получено, но не совпало — новая попытка
+    if last is None:
+        return ('noresp', None)
+    return ('mismatch', last)
+
+
 # ── шаги ──────────────────────────────────────────────────────────────
 
 def step_mass_erase(cfg):
@@ -190,17 +345,30 @@ def step_mass_erase(cfg):
             return False
 
     print("  выполняю mass-erase...")
+    addr = cfg.get("dfu_address", "0x08000000")
     result = subprocess.run(
-        'dfu-util -a 0 -s 0x08000000:mass-erase:force -D /tmp/obrik_empty.bin',
-        shell=True, timeout=60
+        f'dfu-util -a 0 -s {addr}:mass-erase:force -D /tmp/obrik_empty.bin',
+        shell=True, capture_output=True, text=True, timeout=120
     )
-    if result.returncode == 0:
-        print("  ✓ mass-erase завершён")
-        print("  Плата в режиме DFU — можно прошивать загрузчик и PX4.")
-    else:
+    print(result.stdout)
+    if result.returncode != 0:
         print(f"  [ОШИБКА] mass-erase завершился с кодом {result.returncode}")
+        if result.stderr:
+            print(result.stderr)
+        return False
+    print("  ✓ mass-erase выполнен")
+
+    # верификация: регион flash должен читаться как 0xFF (стёрт)
+    e = verify_dfu_erased(addr)
+    if e is True:
+        print("  ✓ проверка: flash стёрт (0xFF)")
+    elif e is None:
+        print("  ⚠ readback-проверку стирания выполнить не удалось (dfu-util)")
+    else:
+        print("  [ОШИБКА] flash НЕ стёрт после mass-erase — повторите")
         return False
 
+    print("  Плата в режиме DFU — можно прошивать загрузчик и PX4.")
     return True
 
 
@@ -243,15 +411,27 @@ def step_flash_bootloader(cfg):
     print(f"  прошиваю загрузчик → {addr} из {bl}")
     result = subprocess.run(
         f'dfu-util -a 0 --dfuse-address {addr} -D "{bl}"',
-        shell=True
+        shell=True, capture_output=True, text=True
     )
-    if result.returncode == 0:
-        print("  ✓ загрузчик прошит")
-        print("  Плата остаётся в режиме DFU — можно сразу прошивать PX4 (шаг 2).")
-    else:
+    print(result.stdout)
+    if result.returncode != 0:
         print(f"  [ОШИБКА] dfu-util завершился с кодом {result.returncode}")
+        if result.stderr:
+            print(result.stderr)
+        return False
+    print("  ✓ загрузчик прошит")
+
+    # верификация записи: читаем flash обратно и сверяем с файлом
+    v = verify_dfu_write(addr, bl)
+    if v is True:
+        print("  ✓ проверка: загрузчик совпал байт-в-байт")
+    elif v is None:
+        print("  ⚠ readback-проверку выполнить не удалось (dfu-util) — полагаюсь на код записи")
+    else:
+        print("  [ОШИБКА] readback НЕ совпал с файлом загрузчика — запись повреждена, повторите")
         return False
 
+    print("  Плата остаётся в режиме DFU — можно сразу прошивать PX4 (шаг 2).")
     return True
 
 
@@ -291,11 +471,11 @@ def step_flash_firmware(cfg):
             print("\n  >>> ОТКЛЮЧИТЕ USB, затем подключите заново БЕЗ BOOT. <<<")
             print("  >>> Плата загрузится в PX4. <<<")
             input("  Нажмите Enter, когда плата переподключена и загрузилась...")
-            port = wait_port(30)
-            if port:
-                print(f"  ✓ плата доступна на {port}")
-            else:
-                print("  ? плата не обнаружена — проверьте подключение USB")
+            print("  проверка: подключаюсь к новой прошивке по MAVLink...")
+            if not verify_firmware_running(cfg, fw):
+                print("  [ОШИБКА] прошивка залита, но плата не подтвердила запуск PX4.")
+                return False
+            print("  ✓ прошивка подтверждена — PX4 запущен")
             return True
         else:
             print(f"  [ОШИБКА] dfu-util завершился с кодом {result.returncode}")
@@ -334,7 +514,7 @@ def step_flash_firmware(cfg):
     print(result.stdout)
     combined = result.stdout + result.stderr
     if result.returncode == 0 and ("Reboot" in combined or "Success" in combined or "done" in combined.lower()):
-        print("  ✓ прошивка залита — полётник перезагружается")
+        print("  ✓ образ записан и проверен загрузчиком (CRC)")
     else:
         print(f"  [ОШИБКА] px_uploader завершился с кодом {result.returncode}")
         if result.stdout:
@@ -345,6 +525,11 @@ def step_flash_firmware(cfg):
 
     print("  Жду перезагрузки полётника (8 сек)...")
     time.sleep(8)
+    print("  проверка: подключаюсь к новой прошивке по MAVLink...")
+    if not verify_firmware_running(cfg, fw):
+        print("  [ОШИБКА] прошивка залита, но плата не подтвердила запуск PX4.")
+        return False
+    print("  ✓ прошивка подтверждена — PX4 запущен")
     return True
 
 
@@ -580,79 +765,66 @@ def step_load_params(cfg):
 
     print(f"  порт: {port}")
     m = mavlink_connect(port, int(cfg.get("baud", "57600")))
+    time.sleep(1)  # дать параметрическому серверу PX4 подняться
 
-    sent = 0
-    failed = 0
+    total = len(params_to_set)
+    ok_list, mismatch, noresp, toolong = [], [], [], []
 
     for idx, (pname, pval) in enumerate(params_to_set):
-        pname_b = pname.encode()
-        if len(pname_b) > 16:
-            print(f"  [ПРОПУСК] {pname} — имя длиннее 16 символов")
-            failed += 1
-            continue
+        # каждый param_set подтверждается ответным PARAM_VALUE (до 3 попыток)
+        status, readback = set_param_verified(m, pname, pval)
+        if status == 'ok':
+            ok_list.append(pname)
+        elif status == 'mismatch':
+            mismatch.append((pname, pval, readback))
+        elif status == 'toolong':
+            toolong.append(pname)
+        else:  # noresp
+            noresp.append(pname)
 
-        pname_b = pname_b.ljust(16, b"\x00")
+        if idx % 50 == 49 or idx == total - 1:
+            print(f"  прогресс {idx + 1}/{total}: "
+                  f"ok={len(ok_list)} mismatch={len(mismatch)} нет_ответа={len(noresp)}")
 
-        # MAV_PARAM_TYPE_FLOAT (9) — подходит для float и int параметров
-        m.mav.param_set_send(
-            1,                # target_system
-            1,                # target_component
-            pname_b,          # param_id
-            pval,             # param_value
-            9                 # MAV_PARAM_TYPE_FLOAT
-        )
-        sent += 1
-
-        # небольшой темп, чтобы не забить очередь
-        if idx % 20 == 19:
-            time.sleep(0.2)
-        if idx % 100 == 99:
-            print(f"  отправлено {sent}/{len(params_to_set)}...")
-
-    time.sleep(1)
-
-    # сохранить параметры в flash через nsh
-    print("  сохраняю параметры в flash...")
-    nsh_send(m, "param save", timeout_s=5)
-    time.sleep(3)
-
-    # верификация критических параметров
-    print("  проверка критических параметров...")
-    critical = {pname for pname, _ in params_to_set if pname in (
-        "BAT1_N_CELLS", "BAT1_V_DIV", "EKF2_OF_CTRL",
-        "SENS_FLOW_MAXHGT", "COM_ARM_BAT_MIN", "SYS_AUTOSTART",
-    )}
-    verified = 0
-    for pname in sorted(critical):
-        got = None
-        try:
-            m.mav.param_request_read_send(1, 1, pname.encode().ljust(16, b'\x00'), -1)
-            t0 = time.time()
-            while time.time() - t0 < 2:
-                msg = m.recv_match(type='PARAM_VALUE', blocking=True, timeout=1)
-                if msg and msg.param_id.rstrip('\x00') == pname:
-                    got = msg.param_value
-                    break
-        except Exception:
-            pass
-        if got is not None:
-            expected = next((v for n, v in params_to_set if n == pname), None)
-            if expected is not None and abs(got - expected) < 1e-4:
-                print(f"    ✓ {pname} = {got}")
-                verified += 1
-            else:
-                print(f"    ⚠ {pname} = {got} (ожид: {expected})")
-        else:
-            print(f"    ? {pname} — не удалось прочитать")
+    # сохранить параметры в flash и проверить, что save прошёл без ошибки
+    print("  сохраняю параметры в flash (param save)...")
+    save_out = nsh_send(m, "param save", timeout_s=6)
+    time.sleep(2)
+    save_ok = not any(w in save_out.lower() for w in ("fail", "error", "invalid", "no such"))
+    if save_ok:
+        print("  ✓ param save выполнен")
+    else:
+        print("  ✗ param save вернул ошибку:")
+        for line in save_out.splitlines():
+            if line.strip():
+                print(f"    | {line.strip()[:130]}")
 
     m.close()
 
-    if failed == 0:
-        print(f"  ✓ {sent} параметров отправлено и сохранено")
-    else:
-        print(f"  ⚠ {sent} отправлено, {failed} пропущено")
+    # ── отчёт ──
+    print(f"\n  подтверждено (readback): {len(ok_list)}/{total}")
+    if mismatch:
+        print(f"  ✗ значение НЕ совпало после записи: {len(mismatch)}")
+        for pname, want, got in mismatch[:15]:
+            print(f"      {pname}: хотели {want}, на плате {got}")
+        if len(mismatch) > 15:
+            print(f"      ... ещё {len(mismatch) - 15}")
+    if noresp:
+        print(f"  ⚠ без ответа (нет в этой прошивке или сбой связи): {len(noresp)}")
+        for pname in noresp[:15]:
+            print(f"      {pname}")
+        if len(noresp) > 15:
+            print(f"      ... ещё {len(noresp) - 15}")
+    if toolong:
+        print(f"  ⚠ пропущены (имя >16 символов): {len(toolong)} — {', '.join(toolong[:10])}")
+
+    all_ok = save_ok and not mismatch and not noresp and not toolong
     print("  >>> ОТКЛЮЧИТЕ полётник от питания и подключите заново (перезагрузка). <<<")
-    return True
+    if all_ok:
+        print(f"  ✓ все {total} параметров записаны и подтверждены")
+    else:
+        print("  ⚠ не все параметры подтверждены — см. список выше")
+    return all_ok
 
 
 # ── dry-run ─────────────────────────────────────────────────────────────
