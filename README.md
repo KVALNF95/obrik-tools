@@ -42,6 +42,14 @@ Set-ExecutionPolicy -Scope Process Bypass
 локально. Пути в конфиге можно задавать относительно `obrik_flash.cfg`, чтобы
 вся папка оставалась переносимой.
 
+Для готовых OS-specific комплектов используются отдельные файлы:
+
+- Windows: двойной клик по `INSTALL_WINDOWS.cmd`, затем `RUN_WINDOWS.cmd`;
+- macOS: двойной клик по `INSTALL_MAC.command`, затем `RUN_MAC.command`.
+
+Windows-комплект может содержать официальный статический `dfu-util.exe` рядом
+с `obrik_flash.py`; утилита найдёт его без изменения системного `PATH`.
+
 Для DFU-этапов на Windows нужен `dfu-util.exe` в `PATH`. USB-порт PX4
 определяется через `pyserial` (`COMx`), QGroundControl закрывается через
 `taskkill`.

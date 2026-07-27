@@ -8,6 +8,7 @@ case "$(uname -s)" in
   Darwin)
     command -v brew >/dev/null || { echo "Нужен Homebrew: https://brew.sh"; exit 1; }
     brew list dfu-util >/dev/null 2>&1 || brew install dfu-util
+    command -v python3 >/dev/null || brew install python
     ;;
   Linux)
     sudo apt-get update -qq

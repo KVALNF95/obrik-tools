@@ -3,6 +3,7 @@ import unittest
 from pathlib import Path
 import subprocess
 import sys
+from unittest import mock
 
 import obrik_flash
 
@@ -36,6 +37,15 @@ class ParamsTests(unittest.TestCase):
         proc.stdout.close()
         self.assertIn("ready", output)
         self.assertIn("done", output)
+
+    def test_bundled_windows_dfu_util(self):
+        with tempfile.TemporaryDirectory() as directory:
+            script = Path(directory) / "obrik_flash.py"
+            executable = Path(directory) / "dfu-util.exe"
+            executable.touch()
+            with mock.patch.object(obrik_flash, "__file__", str(script)), \
+                 mock.patch.object(obrik_flash.os, "name", "nt"):
+                self.assertEqual(obrik_flash.dfu_util_executable(), str(executable))
 
 
 if __name__ == "__main__":

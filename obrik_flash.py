@@ -24,7 +24,7 @@ obrik_flash.py — утилита одной командой для проши�
 Конфиг-файл (obrik_flash.cfg) — формат key=value, см. пример внизу.
 """
 
-import os, sys, time, re, glob, subprocess, argparse, struct, tempfile, threading, queue
+import os, sys, time, re, glob, subprocess, argparse, struct, tempfile, threading, queue, shutil
 
 # ── конфиг по умолчанию ──────────────────────────────────────────────
 DEFAULT_CONFIG = {
@@ -42,6 +42,15 @@ DEFAULT_CONFIG = {
 
 # ── определение состояния платы ──────────────────────────────────────
 
+def dfu_util_executable():
+    """Найти системный или положенный рядом с утилитой dfu-util."""
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    bundled_name = "dfu-util.exe" if os.name == "nt" else "dfu-util"
+    bundled = os.path.join(script_dir, bundled_name)
+    if os.path.isfile(bundled):
+        return bundled
+    return shutil.which("dfu-util") or bundled_name
+
 def detect_board_state():
     """
     Вернуть состояние платы:
@@ -52,7 +61,7 @@ def detect_board_state():
     # DFU? — ищем реальное устройство: строка "Found DFU: [vid:pid]" или
     # "Dfuse" и USB-идентификатор 0483:df11 (STM32 DFU)
     try:
-        result = subprocess.run(["dfu-util", "-l"], capture_output=True, text=True)
+        result = subprocess.run([dfu_util_executable(), "-l"], capture_output=True, text=True)
         out = result.stdout + result.stderr
     except FileNotFoundError:
         out = ""
@@ -273,7 +282,7 @@ def step_mass_erase(cfg):
     print("  выполняю mass-erase...")
     empty_file = os.path.join(tempfile.gettempdir(), "obrik_empty.bin")
     result = subprocess.run([
-        "dfu-util", "-a", "0", "-s", "0x08000000:mass-erase:force",
+        dfu_util_executable(), "-a", "0", "-s", "0x08000000:mass-erase:force",
         "-D", empty_file,
     ], timeout=60)
     if result.returncode == 0:
@@ -324,7 +333,7 @@ def step_flash_bootloader(cfg):
 
     print(f"  прошиваю загрузчик → {addr} из {bl}")
     result = subprocess.run([
-        "dfu-util", "-a", "0", "--dfuse-address", addr, "-D", bl,
+        dfu_util_executable(), "-a", "0", "--dfuse-address", addr, "-D", bl,
     ])
     if result.returncode == 0:
         print("  ✓ загрузчик прошит")
@@ -366,7 +375,7 @@ def step_flash_firmware(cfg):
         print(f"  прошиваю: {fw_bin}")
         print(f"  адрес: {app_addr}")
         result = subprocess.run([
-            "dfu-util", "-a", "0", "--dfuse-address", app_addr,
+            dfu_util_executable(), "-a", "0", "--dfuse-address", app_addr,
             "-D", fw_bin,
         ], timeout=300)
         if result.returncode == 0:
@@ -798,10 +807,10 @@ def dry_run_checks(cfg):
                 print(f"  ✗ {tool}: не найден в {tools_dir}")
                 ok = False
 
-    import shutil
     for dep in ["dfu-util"]:
-        if shutil.which(dep):
-            print(f"  ✓ {dep}: {shutil.which(dep)}")
+        executable = dfu_util_executable()
+        if os.path.isfile(executable) or shutil.which(executable):
+            print(f"  ✓ {dep}: {executable}")
         else:
             print(f"  ✗ {dep}: не установлен")
             ok = False
