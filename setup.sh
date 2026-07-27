@@ -24,7 +24,7 @@ esac
 
 python3 -m venv "$SCRIPT_DIR/.venv"
 "$SCRIPT_DIR/.venv/bin/python" -m pip install --upgrade pip
-"$SCRIPT_DIR/.venv/bin/python" -m pip install pymavlink pyserial
+"$SCRIPT_DIR/.venv/bin/python" -m pip install -r "$SCRIPT_DIR/requirements.txt"
 
 echo "Готово. Проверка:"
 echo "  $SCRIPT_DIR/.venv/bin/python $SCRIPT_DIR/obrik_flash.py --dry-run"

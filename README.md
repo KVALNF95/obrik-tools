@@ -29,6 +29,19 @@ Set-ExecutionPolicy -Scope Process Bypass
 .\.venv\Scripts\python.exe .\obrik_flash.py --steps all
 ```
 
+Если папка уже содержит прошивки, параметры и настроенный `obrik_flash.cfg`,
+на новом Windows-ноутбуке достаточно распаковать её и запустить `run.cmd`.
+При первом запуске он создаст локальный `.venv`, установит версии из
+`requirements.txt` и запустит полный цикл. На Linux/macOS аналогично:
+
+```bash
+./run.sh
+```
+
+Папку `.venv` переносить между компьютерами не нужно — она пересоздаётся
+локально. Пути в конфиге можно задавать относительно `obrik_flash.cfg`, чтобы
+вся папка оставалась переносимой.
+
 Для DFU-этапов на Windows нужен `dfu-util.exe` в `PATH`. USB-порт PX4
 определяется через `pyserial` (`COMx`), QGroundControl закрывается через
 `taskkill`.

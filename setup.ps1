@@ -14,11 +14,10 @@ if (-not (Get-Command dfu-util.exe -ErrorAction SilentlyContinue)) {
 
 & py -3 -m venv (Join-Path $ScriptDir ".venv")
 & $VenvPython -m pip install --upgrade pip
-& $VenvPython -m pip install pymavlink pyserial
+& $VenvPython -m pip install -r (Join-Path $ScriptDir "requirements.txt")
 
 Write-Host ""
 Write-Host "Check:"
 Write-Host "  & `"$VenvPython`" `"$ScriptDir\obrik_flash.py`" --dry-run"
 Write-Host "Run:"
 Write-Host "  & `"$VenvPython`" `"$ScriptDir\obrik_flash.py`" --steps all"
-
