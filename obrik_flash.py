@@ -176,24 +176,23 @@ def nsh_send(m, cmd, timeout_s=6):
 # ── верификация ──────────────────────────────────────────────────────
 
 def _dfu_upload(addr, nbytes):
-    """Прочитать nbytes из flash по адресу через dfu-util. Вернуть bytes|None."""
-    import tempfile
-    tmp = tempfile.NamedTemporaryFile(prefix="obrik_dfu_", suffix=".bin", delete=False)
-    tmp.close()
+    """Прочитать nbytes из flash по адресу через dfu-util. Вернуть bytes|None.
+    Важно: dfu-util -U отказывается перезаписывать существующий файл, поэтому
+    пишем в заведомо несуществующий путь внутри временной директории."""
+    import tempfile, shutil
+    d = tempfile.mkdtemp(prefix="obrik_dfu_")
+    out = os.path.join(d, "readback.bin")
     try:
-        cmd = f'dfu-util -a 0 --dfuse-address {addr}:{nbytes} -U "{tmp.name}"'
+        cmd = f'dfu-util -a 0 --dfuse-address {addr}:{nbytes} -U "{out}"'
         r = subprocess.run(cmd, shell=True, capture_output=True, text=True)
-        if r.returncode != 0 or not os.path.exists(tmp.name):
+        if r.returncode != 0 or not os.path.exists(out):
             return None
-        with open(tmp.name, "rb") as f:
+        with open(out, "rb") as f:
             return f.read()
     except Exception:
         return None
     finally:
-        try:
-            os.unlink(tmp.name)
-        except Exception:
-            pass
+        shutil.rmtree(d, ignore_errors=True)
 
 
 def verify_dfu_write(addr, path):
