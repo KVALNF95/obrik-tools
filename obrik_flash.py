@@ -5,14 +5,14 @@ obrik_flash.py — утилита одной командой для проши�
 Что делает:
   0. Mass-erase (DFU) — полное стирание flash (для проблемных плат)
   1. Прошивает загрузчик (DFU) — требуется нажать кнопку BOOT
-  2. Прошивает основную прошивку PX4 (DFU или px_uploader)
+  2. Прошивает основную прошивку PX4 (DFU)
   3. Загружает параметры в полётник (через MAVLink param_set)
   4. Записывает Beacon Delay = Infinite во все ESC (требуется АКБ)
 
-Шаг 2 автоматически выбирает способ прошивки:
-  - Если плата в DFU — прошивает .bin напрямую через dfu-util
-  - Если плата запущена — сам перезагружает её в загрузчик по MAVLink
-    (кнопка BOOT не нужна) и прошивает через px_uploader.py
+Шаги 1–2 прошивают ВСЕГДА через DFU (кнопка BOOT) — единый процесс и для
+новых плат (с заводским ArduPilot/Betaflight), и для уже прошитых. Если
+плата запущена, утилита попросит переподключить её с зажатым BOOT; между
+шагами 1 и 2 плата остаётся в DFU, кнопка нажимается один раз.
 
 Шаги 3 и 4 работают через одно общее MAVLink-соединение; beacon пишется
 через nsh поверх SERIAL_CONTROL этого же канала (отдельный mavlink_shell
@@ -224,7 +224,7 @@ def get_mavlink(cfg, wait_s=30):
 
 
 def close_mavlink():
-    """Закрыть общее соединение (освободить порт для px_uploader и т.п.)."""
+    """Закрыть общее соединение (освободить USB-порт)."""
     if _MAV_SESSION["m"] is not None:
         try:
             _MAV_SESSION["m"].close()
@@ -631,22 +631,21 @@ def step_flash_bootloader(cfg):
     print("ШАГ 1 — прошивка загрузчика (DFU)")
     print("=" * 60)
 
-    # проверить, не в DFU ли плата уже
+    # прошиваем ВСЕГДА через DFU — у новой платы может стоять заводская
+    # прошивка (ArduPilot/Betaflight), «запущена» не значит «загрузчик наш»
     state = detect_board_state()
-    if state == "running":
-        print("  Плата уже запущена с прошивкой (ttyACM найден).")
-        print("  Загрузчик уже прошит — шаг 1 пропускается.")
-        return True
-
-    if state == "none":
-        print("  Плата не обнаружена.")
+    if state == "dfu":
+        print("  Плата обнаружена в режиме DFU.")
+    else:
+        if state == "running":
+            print("  Плата запущена с какой-то прошивкой, но загрузчик "
+                  "прошивается только через DFU.")
+        else:
+            print("  Плата не обнаружена.")
         print("  >>> ОТКЛЮЧИТЕ плату от USB.")
         print("  >>> Зажмите кнопку BOOT на плате.")
         print("  >>> Подключите USB (держа BOOT).")
         print("  >>> Отпустите BOOT через 1-2 сек после подключения.")
-
-    else:  # state == "dfu"
-        print("  Плата обнаружена в режиме DFU.")
     input("  Нажмите Enter, когда готово...")
 
     # re-detect after user action
@@ -681,9 +680,11 @@ def step_flash_bootloader(cfg):
 
 
 def step_flash_firmware(cfg):
-    """Шаг 2: прошить основную прошивку (DFU или px_uploader)."""
+    """Шаг 2: прошить основную прошивку — ВСЕГДА через DFU (кнопка BOOT).
+
+    Единый процесс для новых и уже прошитых плат. После шага 1 плата и так
+    остаётся в DFU — кнопка нажимается один раз на весь цикл 1→2."""
     fw = cfg["firmware"]
-    tools = cfg["px4_tools"]
     app_addr = cfg.get("app_address", "0x08020000")
 
     if not os.path.exists(fw):
@@ -691,92 +692,41 @@ def step_flash_firmware(cfg):
         return False
 
     print("\n" + "=" * 60)
-    print("ШАГ 2 — прошивка PX4")
+    print("ШАГ 2 — прошивка PX4 (DFU)")
     print("=" * 60)
 
     state = detect_board_state()
-
-    # ── DFU-режим: прошиваем .bin напрямую через dfu-util ──
-    if state == "dfu":
-        print("  Плата в режиме DFU — прошиваю напрямую через dfu-util.")
-        fw_bin = cfg.get("firmware_bin", "")
-        if not fw_bin:
-            fw_bin = fw.replace(".px4", ".bin")
-        if not os.path.exists(fw_bin):
-            print(f"[ОШИБКА] .bin прошивка не найдена: {fw_bin}")
-            print(f"  Укажите firmware_bin в конфиге или положите .bin рядом с .px4.")
+    if state != "dfu":
+        if state == "running":
+            print("  Плата запущена с какой-то прошивкой, но прошиваем "
+                  "только через DFU.")
+        else:
+            print("  Плата не обнаружена.")
+        print("  >>> ОТКЛЮЧИТЕ плату от USB.")
+        print("  >>> Зажмите кнопку BOOT, подключите USB, отпустите BOOT.")
+        input("  Нажмите Enter, когда готово...")
+        state = detect_board_state()
+        if state != "dfu":
+            print("[ОШИБКА] DFU устройство не обнаружено. "
+                  "Убедитесь, что BOOT зажат при подключении.")
             return False
 
-        print(f"  прошиваю: {fw_bin}")
-        print(f"  адрес: {app_addr}")
-        if not dfu_download(app_addr, fw_bin, "прошивка"):
-            return False
-        print("\n  >>> ОТКЛЮЧИТЕ USB, затем подключите заново БЕЗ BOOT. <<<")
-        print("  >>> Плата загрузится в PX4. <<<")
-        input("  Нажмите Enter, когда плата переподключена и загрузилась...")
-        print("  проверка: подключаюсь к новой прошивке по MAVLink...")
-        if not verify_firmware_running(cfg, fw):
-            print("  [ОШИБКА] прошивка залита, но плата не подтвердила запуск PX4.")
-            return False
-        print("  ✓ прошивка подтверждена — PX4 запущен")
-        return True
-
-    # ── Нет платы ──
-    if state == "none":
-        print("  Плата не обнаружена.")
-        print("  >>> Подключите полётник по USB (кнопку BOOT НЕ нажимать).")
-        print("  >>> Или запустите с BOOT для прошивки через DFU после загрузчика.")
+    print("  Плата в режиме DFU — прошиваю напрямую через dfu-util.")
+    fw_bin = cfg.get("firmware_bin", "")
+    if not fw_bin:
+        fw_bin = fw.replace(".px4", ".bin")
+    if not os.path.exists(fw_bin):
+        print(f"[ОШИБКА] .bin прошивка не найдена: {fw_bin}")
+        print(f"  Укажите firmware_bin в конфиге или положите .bin рядом с .px4.")
         return False
 
-    # ── Плата запущена (running): перезагрузка в загрузчик + px_uploader ──
-    print("  Плата подключена и работает — кнопка BOOT не нужна.")
-    subprocess.run("pkill -9 -f QGroundControl 2>/dev/null", shell=True)
-    time.sleep(1)
-
-    port = wait_port(15)
-    if not port:
-        print("[ОШИБКА] полётник не обнаружен.")
+    print(f"  прошиваю: {fw_bin}")
+    print(f"  адрес: {app_addr}")
+    if not dfu_download(app_addr, fw_bin, "прошивка"):
         return False
-
-    # перезагрузка в загрузчик по MAVLink: MAV_CMD_PREFLIGHT_REBOOT_SHUTDOWN,
-    # param1=3 (reboot and keep in bootloader) — px_uploader подхватит плату
-    try:
-        m = get_mavlink(cfg, wait_s=10)
-        if m is not None:
-            print("  перезагружаю плату в загрузчик (MAVLink, без кнопки BOOT)...")
-            m.mav.command_long_send(m.target_system or 1, m.target_component or 1,
-                                    246, 0, 3, 0, 0, 0, 0, 0, 0)
-            time.sleep(0.5)
-    except Exception as e:
-        print(f"  ⚠ команда перезагрузки не отправлена ({e}) — px_uploader перезагрузит сам")
-    close_mavlink()  # освободить порт для px_uploader
-    time.sleep(2)
-    port = wait_port(15) or port  # порт мог переподняться под тем же именем
-
-    uploader = os.path.join(tools, "px_uploader.py")
-    if not os.path.exists(uploader):
-        uploader = os.path.join(tools, "px4_uploader.py")
-    if not os.path.exists(uploader):
-        uploader = "px_uploader.py"
-
-    print(f"  прошиваю: {fw}")
-    cmd = f'python3 "{uploader}" --port "{port}" "{fw}"'
-    result = subprocess.run(cmd, shell=True, timeout=120,
-                            capture_output=True, text=True)
-    print(result.stdout)
-    combined = result.stdout + result.stderr
-    if result.returncode == 0 and ("Reboot" in combined or "Success" in combined or "done" in combined.lower()):
-        print("  ✓ образ записан и проверен загрузчиком (CRC)")
-    else:
-        print(f"  [ОШИБКА] px_uploader завершился с кодом {result.returncode}")
-        if result.stdout:
-            print(result.stdout)
-        if result.stderr:
-            print(result.stderr)
-        return False
-
-    print("  Жду перезагрузки полётника (8 сек)...")
-    time.sleep(8)
+    print("\n  >>> ОТКЛЮЧИТЕ USB, затем подключите заново БЕЗ BOOT. <<<")
+    print("  >>> Плата загрузится в PX4. <<<")
+    input("  Нажмите Enter, когда плата переподключена и загрузилась...")
     print("  проверка: подключаюсь к новой прошивке по MAVLink...")
     if not verify_firmware_running(cfg, fw):
         print("  [ОШИБКА] прошивка залита, но плата не подтвердила запуск PX4.")
@@ -1085,25 +1035,12 @@ def dry_run_checks(cfg):
             print(f"  ✗ {name}: ФАЙЛ НЕ НАЙДЕН — {path}")
             ok = False
 
-    tools_dir = cfg.get("px4_tools", "")
-    if not tools_dir or not os.path.isdir(tools_dir):
-        print(f"  ✗ px4_tools: директория не найдена — {tools_dir}")
-        ok = False
-    else:
-        tp = os.path.join(tools_dir, "px_uploader.py")
-        if os.path.exists(tp):
-            print(f"  ✓ px_uploader.py: {tp}")
-        else:
-            print(f"  ✗ px_uploader.py: не найден в {tools_dir}")
-            ok = False
-
     import shutil
-    for dep in ["dfu-util", "arm-none-eabi-gcc"]:
-        if shutil.which(dep):
-            print(f"  ✓ {dep}: {shutil.which(dep)}")
-        else:
-            print(f"  ✗ {dep}: не установлен")
-            ok = False
+    if shutil.which("dfu-util"):
+        print(f"  ✓ dfu-util: {shutil.which('dfu-util')}")
+    else:
+        print("  ✗ dfu-util: не установлен")
+        ok = False
 
     for mod in [("pymavlink", "mavutil"), ("serial", None)]:
         try:
