@@ -168,7 +168,6 @@ class App:
         self.fc_cb = ttk.Combobox(top, textvariable=self.fc_var,
                                   state="readonly", width=24)
         self.fc_cb.grid(row=0, column=3, padx=6)
-        self._fill_selectors()
 
         self.board_lbl = tk.Label(r, text="Плата: …", font=("", 11, "bold"),
                                   bg="#e3e7ea", fg="#666", pady=8)
@@ -199,15 +198,18 @@ class App:
 
         aux = ttk.Frame(r, padding=(12, 0))
         aux.pack(fill="x")
-        self.dry_btn = ttk.Button(aux, text="Проверка файлов (dry-run)",
-                                  command=lambda: self.run("", dry=True))
-        self.dry_btn.pack(side="left")
         self.erase_btn = ttk.Button(aux, text="Mass-erase (шаг 0)",
                                     command=self.run_erase)
-        self.erase_btn.pack(side="left", padx=8)
+        self.erase_btn.pack(side="left")
         self.abort_btn = ttk.Button(aux, text="Прервать", command=self.abort,
                                     state="disabled")
         self.abort_btn.pack(side="right")
+
+        # автоматическая проверка файлов выбранного дрона/полётника
+        self.check_lbl = tk.Label(r, text="", bg="#f4f7f9", anchor="w",
+                                  justify="left", wraplength=580,
+                                  font=("", 9))
+        self.check_lbl.pack(fill="x", padx=12, pady=(6, 0))
 
         # статус текущего действия + «что требуется»
         st = ttk.Frame(r, padding=(12, 10, 12, 0))
@@ -233,6 +235,9 @@ class App:
                                 wrap="word")
         self.log_visible = False
 
+        self._fill_selectors()
+        self.fc_cb.bind("<<ComboboxSelected>>", lambda e: self._validate())
+
     def _fill_selectors(self):
         d_names = [v.get("name", k) for k, v in self.drones.items()]
         self.drone_cb["values"] = d_names
@@ -252,6 +257,44 @@ class App:
                 self.fc_var.set(fc.get("name", fc_id))
             elif self.fc_cb["values"]:
                 self.fc_cb.current(0)
+        self._validate()
+
+    def _validate(self):
+        """Автопроверка: все ли файлы выбранного дрона/полётника на месте."""
+        import shutil
+        probs = []
+        if not shutil.which("dfu-util"):
+            probs.append("не установлен dfu-util")
+
+        def chk(label, p):
+            if not p:
+                probs.append(f"{label} не задан в drones.cfg")
+                return
+            full = p if os.path.isabs(p) else os.path.join(HERE, p)
+            if not os.path.exists(full):
+                probs.append(f"{label}: нет файла {p}")
+
+        fc = self._sel(self.fcs, self.fc_var.get())
+        dr = self._sel(self.drones, self.drone_var.get())
+        if fc:
+            chk("загрузчик", fc.get("bootloader", ""))
+            chk("прошивка", fc.get("firmware", ""))
+            chk("прошивка (.bin)", fc.get("firmware_bin", ""))
+        if dr:
+            chk("параметры", dr.get("params_file", ""))
+        self.files_ok = not probs
+        if probs:
+            self.check_lbl.config(text="⚠ " + "; ".join(probs),
+                                  fg="#aa3333")
+        else:
+            self.check_lbl.config(
+                text="✓ Файлы прошивки и параметров на месте",
+                fg="#1d6b32")
+        if not self.proc:
+            state = "normal" if self.files_ok else "disabled"
+            self.full_btn.config(state=state)
+            for _, btn in self.step_rows.values():
+                btn.config(state=state)
 
     @staticmethod
     def _sel(table, shown_name):
@@ -272,7 +315,7 @@ class App:
     # ── запуск/остановка ─────────────────────────────────────────
 
     def run(self, steps, dry=False):
-        if self.proc:
+        if self.proc or not getattr(self, "files_ok", True):
             return
         cmd = [sys.executable, "-u", FLASH_SCRIPT]
         if steps:
@@ -327,13 +370,15 @@ class App:
 
     def _set_running(self, running):
         state = "disabled" if running else "normal"
-        for w in (self.full_btn, self.dry_btn, self.erase_btn):
+        for w in (self.full_btn, self.erase_btn):
             w.config(state=state)
         for _, btn in self.step_rows.values():
             btn.config(state=state)
         self.drone_cb.config(state="disabled" if running else "readonly")
         self.fc_cb.config(state="disabled" if running else "readonly")
         self.abort_btn.config(state="normal" if running else "disabled")
+        if not running:
+            self._validate()
 
     # ── чтение вывода скрипта ────────────────────────────────────
 
@@ -412,10 +457,23 @@ class App:
     # ── обновление виджетов ──────────────────────────────────────
 
     def _update_board_label(self):
+        # пока скрипт ждёт плату в другом режиме — пишем прямо, что не так
+        if self.proc and self.prompt_kind == "dfu" and self.board == "running":
+            self.board_lbl.config(
+                text="Плата подключена БЕЗ кнопки BOOT — переподключите, "
+                     "зажав BOOT",
+                bg="#ffd9d9", fg="#aa3333")
+            return
+        if self.proc and self.prompt_kind == "running" \
+                and self.board == "dfu":
+            self.board_lbl.config(
+                text="Плата в BOOT-режиме — переподключите БЕЗ кнопки BOOT",
+                bg="#ffd9d9", fg="#aa3333")
+            return
         txt, bg, fg = {
-            "dfu": ("Плата: в BOOT-режиме (DFU) — можно прошивать",
+            "dfu": ("Плата: в BOOT-режиме (DFU) — готова к прошивке",
                     "#fff3cd", "#7a5b00"),
-            "running": ("Плата: подключена, прошивка запущена",
+            "running": ("Плата: подключена, работает в обычном режиме",
                         "#d9f2df", "#1d6b32"),
             "none": ("Плата: не подключена", "#e3e7ea", "#666666"),
         }[self.board]
