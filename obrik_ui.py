@@ -194,9 +194,9 @@ class App:
 
         mid = ttk.Frame(r, padding=(12, 0))
         mid.pack(fill="x")
-        self.full_btn = ttk.Button(mid, text="▶  Прошить полностью (шаги 1–4)",
+        self.full_btn = ttk.Button(mid, text="▶  Прошить полностью",
                                    style="Big.TButton",
-                                   command=lambda: self.run("1,2,3,4"))
+                                   command=lambda: self.run(self._full_steps()))
         self.full_btn.pack(fill="x")
 
         # шаги — только индикаторы хода: если что-то уже стоит на плате,
@@ -212,7 +212,7 @@ class App:
             badge.pack(side="left")
             tk.Label(row, text=f"Шаг {n} — {name}", bg="#ffffff",
                      anchor="w").pack(side="left", fill="x", expand=True)
-            self.step_rows[n] = badge
+            self.step_rows[n] = (row, badge)
 
         aux = ttk.Frame(r, padding=(12, 0))
         aux.pack(fill="x")
@@ -273,7 +273,25 @@ class App:
                 self.fc_var.set(fc.get("name", fc_id))
             elif self.fc_cb["values"]:
                 self.fc_cb.current(0)
+        self._apply_beacon()
         self._fc_changed()
+
+    def _beacon_on(self):
+        """Нужен ли шаг 4 (отключение писка) для выбранного дрона."""
+        dr = self._sel(self.drones, self.drone_var.get())
+        return bool(dr) and str(dr.get("beacon", "no")).strip().lower() \
+            in ("yes", "y", "1", "true", "on", "да")
+
+    def _full_steps(self):
+        return "1,2,3,4" if self._beacon_on() else "1,2,3"
+
+    def _apply_beacon(self):
+        """Показать/скрыть строку шага 4 по типу дрона."""
+        row, _ = self.step_rows[4]
+        if self._beacon_on():
+            row.pack(fill="x", padx=8, pady=3)
+        else:
+            row.pack_forget()
 
     def _fc_changed(self, *_):
         """Перестроить список ПО под выбранный полётник."""
@@ -524,7 +542,7 @@ class App:
         self.board_lbl.config(text=txt, bg=bg, fg=fg)
 
     def _refresh_steps(self):
-        for n, badge in self.step_rows.items():
+        for n, (row, badge) in self.step_rows.items():
             badge.config(text=BADGE.get(self.steps_state.get(n), "▫"))
 
     def _progress_value(self):

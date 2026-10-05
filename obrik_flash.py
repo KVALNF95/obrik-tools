@@ -1094,21 +1094,23 @@ def step_beacon_delay(cfg):
         print("[ОШИБКА] полётник не обнаружен по USB.")
         return False
 
-    # проверка АКБ; если не видно — попросить подключить и проверить ещё раз
-    print("  проверка АКБ...")
+    # ждём АКБ: как только полётник покажет ≥ 8 В — начинаем сами, без Enter.
+    # Опрашиваем напряжение по кругу; Enter не нужен (UI может прервать).
+    min_v = float(cfg.get("beacon_min_voltage", "8.0"))
+    print(f"  Подключите АКБ. Начну, как только напряжение будет ≥ {min_v:.0f} В.")
     v = battery_voltage(m)
-    if v is None or v < 3.0:
-        cur = "не определяется" if v is None else f"{v:.1f}V"
-        print(f"  ⚠ напряжение АКБ: {cur}")
-        try:
-            input("  Подключите АКБ и нажмите Enter...")
-        except EOFError:
-            pass
+    waited = 0
+    while (v is None or v < min_v) and waited < 600:
+        cur = "нет данных" if v is None else f"{v:.1f} В"
+        print(f"  жду АКБ... сейчас: {cur}")
+        time.sleep(2)
+        waited += 2
         v = battery_voltage(m)
-    if v is not None and v >= 3.0:
-        print(f"  ✓ батарея: {v:.1f}V")
+    if v is not None and v >= min_v:
+        print(f"  ✓ АКБ подключён: {v:.1f} В — начинаю отключение писка")
     else:
-        print("  ⚠ напряжение не подтверждено — продолжаю, но ESC могут не ответить")
+        print("  ⚠ напряжение так и не поднялось выше порога — продолжаю, "
+              "но ESC могут не ответить")
 
     print("  останавливаю dshot...")
     nsh_send(m, "dshot stop", timeout_s=2)
