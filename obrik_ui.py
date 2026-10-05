@@ -135,6 +135,7 @@ class App:
         self.prompt_key = None      # текущая пауза скрипта (текст)
         self.prompt_kind = None
         self.asked = False          # уже показывали окошко для этой паузы
+        self.answered_key = None    # пауза, на которую уже ответили
         self.board = "none"
         self.drones, self.fcs, self.softs = load_drones()
 
@@ -391,6 +392,9 @@ class App:
                 self.proc.stdin.flush()
             except Exception:
                 pass
+        # строка-приглашение ещё висит в выводе, пока скрипт не напечатает
+        # что-то новое — запоминаем её, чтобы не принять за новую паузу
+        self.answered_key = self.prompt_key
         self._clear_prompt()
 
     def _set_running(self, running):
@@ -544,9 +548,12 @@ class App:
         tail = self.cur_line.strip()
         waiting = "Enter" in tail or tail.endswith("[Y/n]:")
         if not waiting:
+            self.answered_key = None   # скрипт что-то напечатал — пауза ушла
             if self.prompt_key:
                 self._clear_prompt()
             return
+        if tail == self.answered_key:
+            return                     # на эту паузу уже ответили
         if tail != self.prompt_key:
             # новая пауза
             self.prompt_key = tail
@@ -570,9 +577,13 @@ class App:
             or (self.prompt_kind == "plug" and self.board != "none")
         if ready and not self.asked:
             self.asked = True
-            name = {"dfu": "в BOOT-режиме (DFU)",
-                    "running": "подключена и загрузилась",
-                    "plug": "обнаружена"}[self.prompt_kind]
+            if self.prompt_kind == "plug":
+                name = ("подключена (в BOOT-режиме)" if self.board == "dfu"
+                        else "подключена и загрузилась")
+            else:
+                name = {"dfu": "в BOOT-режиме (DFU)",
+                        "running": "загрузилась в обычном режиме"
+                        }[self.prompt_kind]
             if messagebox.askyesno("Плата обнаружена",
                                    f"Плата {name}.\nПродолжаем?"):
                 self.send_stdin("\n")
