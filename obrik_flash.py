@@ -394,6 +394,44 @@ def parse_px4_git(fw_path):
         return None
 
 
+def firmware_matches_running(cfg, fw_path):
+    """Строгая проверка БЕЗ захода в DFU: плата запущена и на ней РОВНО
+    наша прошивка PX4 (git-хэш с платы найден в образе). Любая неуверенность
+    (нет heartbeat, нет версии, порт занят QGC) — False."""
+    try:
+        from pymavlink import mavutil
+    except ImportError:
+        return False
+    port = find_tty()
+    if not port:
+        return False
+    try:
+        m = mavutil.mavlink_connection(port, baud=int(cfg.get("baud", "57600")))
+    except Exception:
+        return False
+    try:
+        if m.wait_heartbeat(timeout=10) is None:
+            return False
+        m.mav.command_long_send(m.target_system or 1, m.target_component or 1,
+                                520, 0, 1, 0, 0, 0, 0, 0, 0)
+        ver = m.recv_match(type='AUTOPILOT_VERSION', blocking=True, timeout=5)
+        if ver is None:
+            return False
+        try:
+            running_git = bytes(ver.flight_custom_version).split(b'\x00')[0]\
+                .decode('ascii', 'replace').strip()
+        except Exception:
+            return False
+        want_git = parse_px4_git(fw_path)
+        return bool(running_git and want_git and running_git[:6]
+                    and running_git[:6] in want_git)
+    finally:
+        try:
+            m.close()
+        except Exception:
+            pass
+
+
 def verify_firmware_running(cfg, fw_path, port=None):
     """После прошивки подтвердить, что плата загрузилась в PX4.
     Проверяет: порт вернулся → heartbeat → AUTOPILOT_VERSION (+сверка git)."""
@@ -639,7 +677,17 @@ def step_flash_bootloader(cfg):
         print("  Плата обнаружена в режиме DFU.")
     else:
         if state == "running":
-            print("  Плата запущена с какой-то прошивкой, но загрузчик "
+            # плата запущена: если она отвечает по MAVLink ровно нашей
+            # прошивкой — значит и загрузчик исправен (плата же загрузилась),
+            # и прошивать нечего. BOOT-режим не нужен вовсе.
+            print("  Плата запущена — проверяю по MAVLink, что на ней стоит...")
+            if firmware_matches_running(cfg, cfg["firmware"]):
+                print("  ✓ на плате уже наша прошивка PX4 (git-хэш совпал)")
+                print("  ✓ плата с ней загружается — значит загрузчик исправен")
+                print("  шаги 1–2 пропущены, BOOT-режим не нужен")
+                cfg["_fw_already_ok"] = True
+                return True
+            print("  На плате другая или чужая прошивка — загрузчик "
                   "прошивается только через DFU.")
         else:
             print("  Плата не обнаружена.")
@@ -703,10 +751,19 @@ def step_flash_firmware(cfg):
     print("ШАГ 2 — прошивка PX4 (DFU)")
     print("=" * 60)
 
+    if cfg.get("_fw_already_ok"):
+        print("  ✓ прошивка уже подтверждена по MAVLink (шаг 1) — пропущено")
+        return True
+
     state = detect_board_state()
     if state != "dfu":
         if state == "running":
-            print("  Плата запущена с какой-то прошивкой, но прошиваем "
+            print("  Плата запущена — проверяю по MAVLink, что на ней стоит...")
+            if firmware_matches_running(cfg, fw):
+                print("  ✓ на плате уже наша прошивка PX4 (git-хэш совпал) "
+                      "— шаг пропущен, BOOT-режим не нужен")
+                return True
+            print("  На плате другая или чужая прошивка — прошиваем "
                   "только через DFU.")
         else:
             print("  Плата не обнаружена.")
