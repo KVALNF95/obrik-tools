@@ -59,20 +59,22 @@ def board_state():
 
 
 def load_drones():
-    drones, fcs = {}, {}
+    drones, fcs, softs = {}, {}, {}
     if os.path.exists(DRONES_CFG):
         cp = configparser.ConfigParser()
         cp.read(DRONES_CFG, encoding="utf-8")
         for sec in cp.sections():
             if sec.startswith("fc:"):
                 fcs[sec[3:]] = dict(cp[sec])
+            elif sec.startswith("soft:"):
+                softs[sec[5:]] = dict(cp[sec])
             elif sec.startswith("drone:"):
                 drones[sec[6:]] = dict(cp[sec])
-    return drones, fcs
+    return drones, fcs, softs
 
 
-def build_cfg(drone, fc):
-    """Временный конфиг: базовый + params дрона + прошивки полётника."""
+def build_cfg(drone, soft):
+    """Временный конфиг: базовый + params дрона + файлы выбранного ПО."""
     overridden = {"bootloader", "firmware", "firmware_bin", "params_file"}
     lines = []
     if os.path.exists(BASE_CFG):
@@ -85,9 +87,9 @@ def build_cfg(drone, fc):
                 lines.append(raw.rstrip("\n"))
     lines += [
         "",
-        f"bootloader   = {fc.get('bootloader', '')}",
-        f"firmware     = {fc.get('firmware', '')}",
-        f"firmware_bin = {fc.get('firmware_bin', '')}",
+        f"bootloader   = {soft.get('bootloader', '')}",
+        f"firmware     = {soft.get('firmware', '')}",
+        f"firmware_bin = {soft.get('firmware_bin', '')}",
         f"params_file  = {drone.get('params_file', '')}",
     ]
     path = os.path.join(tempfile.gettempdir(), "obrik_ui_run.cfg")
@@ -131,7 +133,7 @@ class App:
         self.prompt_kind = None
         self.asked = False          # уже показывали окошко для этой паузы
         self.board = "none"
-        self.drones, self.fcs = load_drones()
+        self.drones, self.fcs, self.softs = load_drones()
 
         self._build_ui()
         threading.Thread(target=self._board_poller, daemon=True).start()
@@ -168,6 +170,12 @@ class App:
         self.fc_cb = ttk.Combobox(top, textvariable=self.fc_var,
                                   state="readonly", width=24)
         self.fc_cb.grid(row=0, column=3, padx=6)
+        ttk.Label(top, text="ПО:").grid(row=1, column=0, sticky="w",
+                                        pady=(6, 0))
+        self.soft_var = tk.StringVar()
+        self.soft_cb = ttk.Combobox(top, textvariable=self.soft_var,
+                                    state="readonly", width=24)
+        self.soft_cb.grid(row=1, column=1, padx=(6, 18), pady=(6, 0))
 
         self.board_lbl = tk.Label(r, text="Плата: …", font=("", 11, "bold"),
                                   bg="#e3e7ea", fg="#666", pady=8)
@@ -197,9 +205,6 @@ class App:
 
         aux = ttk.Frame(r, padding=(12, 0))
         aux.pack(fill="x")
-        self.erase_btn = ttk.Button(aux, text="Mass-erase (шаг 0)",
-                                    command=self.run_erase)
-        self.erase_btn.pack(side="left")
         self.abort_btn = ttk.Button(aux, text="Прервать", command=self.abort,
                                     state="disabled")
         self.abort_btn.pack(side="right")
@@ -235,7 +240,8 @@ class App:
         self.log_visible = False
 
         self._fill_selectors()
-        self.fc_cb.bind("<<ComboboxSelected>>", lambda e: self._validate())
+        self.fc_cb.bind("<<ComboboxSelected>>", self._fc_changed)
+        self.soft_cb.bind("<<ComboboxSelected>>", lambda e: self._validate())
 
     def _fill_selectors(self):
         d_names = [v.get("name", k) for k, v in self.drones.items()]
@@ -256,6 +262,23 @@ class App:
                 self.fc_var.set(fc.get("name", fc_id))
             elif self.fc_cb["values"]:
                 self.fc_cb.current(0)
+        self._fc_changed()
+
+    def _fc_changed(self, *_):
+        """Перестроить список ПО под выбранный полётник."""
+        fc_id = self._id(self.fcs, self.fc_var.get())
+        fitting = {k: v for k, v in self.softs.items()
+                   if v.get("fc", "") == fc_id}
+        self.soft_cb["values"] = [v.get("name", k)
+                                  for k, v in fitting.items()]
+        dr = self._sel(self.drones, self.drone_var.get())
+        want = dr.get("soft", "") if dr else ""
+        if want in fitting:       # штатное ПО дрона, если подходит
+            self.soft_var.set(fitting[want].get("name", want))
+        elif fitting:
+            self.soft_cb.current(0)
+        else:
+            self.soft_var.set("")
         self._validate()
 
     def _validate(self):
@@ -273,12 +296,14 @@ class App:
             if not os.path.exists(full):
                 probs.append(f"{label}: нет файла {p}")
 
-        fc = self._sel(self.fcs, self.fc_var.get())
+        soft = self._sel(self.softs, self.soft_var.get())
         dr = self._sel(self.drones, self.drone_var.get())
-        if fc:
-            chk("загрузчик", fc.get("bootloader", ""))
-            chk("прошивка", fc.get("firmware", ""))
-            chk("прошивка (.bin)", fc.get("firmware_bin", ""))
+        if soft:
+            chk("загрузчик", soft.get("bootloader", ""))
+            chk("прошивка", soft.get("firmware", ""))
+            chk("прошивка (.bin)", soft.get("firmware_bin", ""))
+        else:
+            probs.append("для этого полётника нет ПО в drones.cfg")
         if dr:
             chk("параметры", dr.get("params_file", ""))
         self.files_ok = not probs
@@ -298,6 +323,13 @@ class App:
         for k, v in table.items():
             if v.get("name", k) == shown_name:
                 return v
+        return None
+
+    @staticmethod
+    def _id(table, shown_name):
+        for k, v in table.items():
+            if v.get("name", k) == shown_name:
+                return k
         return None
 
     def toggle_details(self):
@@ -320,9 +352,9 @@ class App:
         if dry:
             cmd += ["--dry-run"]
         dr = self._sel(self.drones, self.drone_var.get())
-        fc = self._sel(self.fcs, self.fc_var.get())
-        if dr and fc:
-            cmd += ["--config", build_cfg(dr, fc)]
+        soft = self._sel(self.softs, self.soft_var.get())
+        if dr and soft:
+            cmd += ["--config", build_cfg(dr, soft)]
         try:
             self.proc = subprocess.Popen(
                 cmd, cwd=HERE, stdin=subprocess.PIPE,
@@ -345,13 +377,6 @@ class App:
                          daemon=True).start()
         self._set_running(True)
 
-    def run_erase(self):
-        if messagebox.askyesno(
-                "Mass-erase",
-                "Сотрёт ВСЮ flash-память платы (загрузчик, прошивку, "
-                "параметры).\nПродолжить?"):
-            self.run("0")
-
     def abort(self):
         if self.proc:
             self.proc.terminate()
@@ -366,11 +391,9 @@ class App:
         self._clear_prompt()
 
     def _set_running(self, running):
-        state = "disabled" if running else "normal"
-        for w in (self.full_btn, self.erase_btn):
-            w.config(state=state)
-        self.drone_cb.config(state="disabled" if running else "readonly")
-        self.fc_cb.config(state="disabled" if running else "readonly")
+        self.full_btn.config(state="disabled" if running else "normal")
+        for cb in (self.drone_cb, self.fc_cb, self.soft_cb):
+            cb.config(state="disabled" if running else "readonly")
         self.abort_btn.config(state="normal" if running else "disabled")
         if not running:
             self._validate()
