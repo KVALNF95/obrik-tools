@@ -92,6 +92,10 @@ def build_cfg(drone, soft):
         f"firmware_bin = {soft.get('firmware_bin', '')}",
         f"params_file  = {drone.get('params_file', '')}",
     ]
+    # сборка из исходников (если задана у ПО)
+    for k in ("px4_src", "px4_repo", "px4_branch", "px4_target"):
+        if soft.get(k):
+            lines.append(f"{k} = {soft[k]}")
     path = os.path.join(tempfile.gettempdir(), "obrik_ui_run.cfg")
     with open(path, "w", encoding="utf-8") as f:
         f.write("\n".join(lines) + "\n")

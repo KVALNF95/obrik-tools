@@ -394,6 +394,130 @@ def parse_px4_git(fw_path):
         return None
 
 
+def _extract_bin_from_px4(px4_path, out_path):
+    """.px4 — это JSON с base64+zlib-образом; достать из него .bin для DFU."""
+    try:
+        import base64, zlib
+        with open(px4_path) as f:
+            img = json.load(f)["image"]
+        data = zlib.decompress(base64.b64decode(img))
+        with open(out_path, "wb") as f:
+            f.write(data)
+        return True
+    except Exception as e:
+        print(f"  ⚠ не удалось извлечь .bin из .px4: {e}")
+        return False
+
+
+def ensure_firmware_fresh(cfg):
+    """Перед прошивкой: если в конфиге задан px4_src (репозиторий исходников
+    PX4), проверить обновления ветки на git, при необходимости пересобрать
+    прошивку и подставить свежие артефакты в cfg.
+    True — можно шить (пусть даже прошивкой из комплекта), False — сборка
+    требовалась, но не удалась."""
+    src = cfg.get("px4_src", "")
+    if not src:
+        return True
+    src = os.path.expanduser(src)
+    branch = cfg.get("px4_branch", "")
+    target = cfg.get("px4_target", "matek_h743-slim_default")
+    repo_url = cfg.get("px4_repo", "")
+    fw = os.path.join(src, "build", target, f"{target}.px4")
+
+    print("\n" + "=" * 60)
+    print("ПОДГОТОВКА — исходники PX4: обновления и сборка")
+    print("=" * 60)
+
+    if not os.path.isdir(os.path.join(src, ".git")) or not branch:
+        print(f"  ⚠ исходники не найдены ({src}) — использую прошивку из комплекта")
+        return True
+
+    def git(*args, timeout=300):
+        return subprocess.run(["git", "-C", src] + list(args),
+                              capture_output=True, text=True, timeout=timeout)
+
+    def norm(url):
+        return url.rstrip("/").removesuffix(".git")
+
+    # найти/завести remote с нужным URL
+    remote = None
+    if repo_url:
+        for line in git("remote", "-v").stdout.splitlines():
+            parts = line.split()
+            if len(parts) >= 2 and norm(parts[1]) == norm(repo_url):
+                remote = parts[0]
+                break
+        if remote is None:
+            git("remote", "add", "sverk-src", repo_url)
+            remote = "sverk-src"
+    else:
+        remote = "origin"
+
+    # есть ли обновления
+    print(f"  проверяю обновления: {remote}/{branch} ...")
+    fetched = git("fetch", remote, branch).returncode == 0
+    if not fetched:
+        print("  ⚠ git недоступен (нет сети?)")
+        if os.path.exists(fw):
+            print("  использую уже собранную прошивку")
+    head = git("rev-parse", "HEAD").stdout.strip()
+    cur_branch = git("rev-parse", "--abbrev-ref", "HEAD").stdout.strip()
+    want = git("rev-parse", f"{remote}/{branch}").stdout.strip() \
+        if fetched else head
+
+    need_build = not os.path.exists(fw)
+    if cur_branch != branch or (want and head != want):
+        if cur_branch != branch:
+            print(f"  переключаюсь на ветку {branch} (была {cur_branch})")
+        else:
+            print(f"  есть обновления: {head[:9]} → {want[:9]}")
+        if git("checkout", "-B", branch, f"{remote}/{branch}").returncode != 0:
+            print("  [ОШИБКА] не удалось переключиться на ветку")
+            return False
+        print("  обновляю сабмодули (может занять несколько минут)...")
+        git("submodule", "sync", "--recursive")
+        if git("submodule", "update", "--init", "--recursive",
+               timeout=3600).returncode != 0:
+            print("  [ОШИБКА] сабмодули не обновились")
+            return False
+        need_build = True
+    elif need_build:
+        print("  исходники актуальны, но собранной прошивки нет — соберу")
+    else:
+        print(f"  ✓ исходники актуальны ({head[:9]}), пересборка не нужна")
+
+    if need_build:
+        print(f"  собираю прошивку: make {target} — при первой сборке "
+              "это может занять 10–15 минут...")
+        p = subprocess.Popen(["make", target], cwd=src,
+                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                             text=True)
+        for line in p.stdout:
+            line = _strip_ansi(line.rstrip())
+            if line:
+                print(f"    {line}")
+        if p.wait() != 0:
+            print("  [ОШИБКА] сборка не удалась — прошивать нечем")
+            return False
+        print("  ✓ сборка успешна")
+
+    if not os.path.exists(fw):
+        print(f"  [ОШИБКА] после сборки нет файла {fw}")
+        return False
+
+    # подставить свежие артефакты
+    cfg["firmware"] = fw
+    dfu_bin = os.path.join(src, "build", target, f"{target}.dfu.bin")
+    if _extract_bin_from_px4(fw, dfu_bin):
+        cfg["firmware_bin"] = dfu_bin
+    bl = os.path.join(src, "boards", "matek", "h743-slim", "extras",
+                      "matek_h743-slim_bootloader.bin")
+    if os.path.exists(bl):
+        cfg["bootloader"] = bl
+    print(f"  использую прошивку из сборки: {fw}")
+    return True
+
+
 def _git_candidates(ver):
     """Вытащить git-хэш из AUTOPILOT_VERSION.flight_custom_version.
     PX4 кладёт его то ASCII-текстом, то бинарно задом наперёд
@@ -1291,6 +1415,13 @@ def main():
             s = s.strip()
             if s.isdigit():
                 do.add(int(s))
+
+    # перед шагами прошивки — проверить git исходников и пересобрать при
+    # обновлениях (если в конфиге задан px4_src)
+    if do & {1, 2}:
+        if not ensure_firmware_fresh(cfg):
+            print("\n[ОШИБКА] подготовка прошивки не удалась — прошивка отменена.")
+            return
 
     success = True
     results = {}
