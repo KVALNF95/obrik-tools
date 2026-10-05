@@ -1116,9 +1116,15 @@ def step_load_params(cfg):
             print(f"  считано после перезагрузки: {len(after)}")
             confirmed = set(ok_list)
             bad = []
+            skipped_auto = 0
             for pname, pval, ptype in params_to_set:
                 if pname not in confirmed:
                     continue  # записать не удалось — сохранение не проверяем
+                # PX4 пересчитывает смещения гироскопа при каждой загрузке —
+                # после ребута они закономерно отличаются, это не ошибка
+                if re.fullmatch(r"CAL_GYRO\d+_[XYZ]OFF", pname):
+                    skipped_auto += 1
+                    continue
                 entry = after.get(pname)
                 if entry is None:
                     val, ft = param_read(m, pname)  # добор потерянных в потоке
@@ -1129,6 +1135,9 @@ def step_load_params(cfg):
                     bad.append((pname, pval, entry[0]))
             # соединение НЕ закрываем — шаг 4 (beacon) использует тот же канал
             persist_ok = not bad
+            if skipped_auto:
+                print(f"  (не сверяю {skipped_auto} гиросмещений CAL_GYRO*OFF — "
+                      f"PX4 пересчитывает их сам при каждой загрузке)")
             if persist_ok:
                 print(f"  ✓ после перезагрузки все {len(confirmed)} записанных "
                       f"параметров на месте — сохранение подтверждено")

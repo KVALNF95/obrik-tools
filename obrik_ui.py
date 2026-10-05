@@ -368,6 +368,7 @@ class App:
             return
         wanted = {int(x) for x in steps.split(",") if x.strip().isdigit()}
         self.steps_state = {n: "wait" for n in wanted}
+        self.aborted = False
         self.log_lines, self.cur_line = [], ""
         self._clear_prompt()
         what = "проверка файлов" if dry else \
@@ -383,6 +384,7 @@ class App:
 
     def abort(self):
         if self.proc:
+            self.aborted = True
             self.proc.terminate()
 
     def send_stdin(self, s):
@@ -470,7 +472,15 @@ class App:
     def _parse_line(self, line):
         m = re.search(r"ШАГ (\d)", line)
         if m:
-            self.steps_state[int(m.group(1))] = "run"
+            n = int(m.group(1))
+            # предыдущий шаг дошёл до следующего без строки об ошибке —
+            # значит, завершился успешно (не ждём финального ИТОГа)
+            for k, st in list(self.steps_state.items()):
+                if k != n and st == "run":
+                    self.steps_state[k] = "ok"
+            self.steps_state[n] = "run"
+        if "шаги 1–2 пропущены" in line:
+            self.steps_state[1] = self.steps_state[2] = "ok"
         m = re.search(r"шаг (\d+) \([^)]*\): (✓ OK|✗ ошибка)", line)
         if m:
             self.steps_state[int(m.group(1))] = \
@@ -527,6 +537,18 @@ class App:
         self.progress.pack_forget()
         self._clear_prompt()
         self._set_running(False)
+        if getattr(self, "aborted", False):
+            # прервано пользователем: недоигранные шаги — не ошибки
+            for n, st in list(self.steps_state.items()):
+                if st in ("run", "wait"):
+                    self.steps_state[n] = "wait"
+            self._refresh_steps()
+            done = [n for n, st in self.steps_state.items() if st == "ok"]
+            self.action_lbl.config(
+                text="⏹ Прервано"
+                     + (f" (шаги {', '.join(map(str, sorted(done)))} успели "
+                        f"выполниться)." if done else "."))
+            return
         for n, st in list(self.steps_state.items()):
             if st in ("run", "wait") and code:
                 self.steps_state[n] = "fail"
