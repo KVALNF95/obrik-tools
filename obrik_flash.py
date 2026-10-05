@@ -635,6 +635,7 @@ def step_flash_bootloader(cfg):
     # прошивка (ArduPilot/Betaflight), «запущена» не значит «загрузчик наш»
     state = detect_board_state()
     if state == "dfu":
+        # плата уже в DFU — никаких вопросов, сразу к делу
         print("  Плата обнаружена в режиме DFU.")
     else:
         if state == "running":
@@ -646,13 +647,13 @@ def step_flash_bootloader(cfg):
         print("  >>> Зажмите кнопку BOOT на плате.")
         print("  >>> Подключите USB (держа BOOT).")
         print("  >>> Отпустите BOOT через 1-2 сек после подключения.")
-    input("  Нажмите Enter, когда готово...")
+        input("  Нажмите Enter, когда готово...")
 
-    # re-detect after user action
-    state = detect_board_state()
-    if state != "dfu":
-        print("[ОШИБКА] DFU устройство не обнаружено. Убедитесь, что BOOT зажат при подключении.")
-        return False
+        # re-detect after user action
+        state = detect_board_state()
+        if state != "dfu":
+            print("[ОШИБКА] DFU устройство не обнаружено. Убедитесь, что BOOT зажат при подключении.")
+            return False
 
     # если на плате уже стоит ровно этот загрузчик — прошивать нечего
     print("  сравниваю загрузчик на плате с файлом...")
