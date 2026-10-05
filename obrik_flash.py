@@ -865,7 +865,8 @@ def step_flash_bootloader(cfg):
             return True
         if kind == "foreign":
             print("  На плате чужая прошивка (не PX4) — загрузчик "
-                  "прошивается только через DFU.")
+                  "прошивается только через DFU, с полным стиранием.")
+            cfg["_do_mass_erase"] = True   # чужой стек — чистим flash
         else:  # silent и после переткивания
             print("  Плата так и не ответила по MAVLink. Возможно, прошивка "
                   "повреждена — перепрошьём через DFU (BOOT).")
@@ -892,10 +893,13 @@ def step_flash_bootloader(cfg):
         print("  Плата остаётся в режиме DFU — можно сразу прошивать PX4 (шаг 2).")
         return True
 
-    # mass-erase + запись загрузчика ОДНОЙ DFU-командой — перезагрузка между
-    # ними не нужна, плата остаётся в DFU. Управляется флагом bl_mass_erase
-    # (по умолчанию вкл): чистый старт при каждой прошивке загрузчика.
-    combined = str(cfg.get("bl_mass_erase", "1")).strip().lower() \
+    # mass-erase делаем ТОЛЬКО для чужого стека (Betaflight/ArduPilot) —
+    # его выставляет MAVLink-опрос (_do_mass_erase) или явный --steps erase.
+    # Для исправной/повреждённой PX4 стирать flash незачем: загрузчик лежит
+    # в своей области, прошивка перезапишется шагом 2. Общий флаг bl_mass_erase
+    # (по умолчанию выкл) — ручной оверрайд на всякий случай.
+    combined = bool(cfg.get("_do_mass_erase")) or \
+        str(cfg.get("bl_mass_erase", "0")).strip().lower() \
         not in ("0", "false", "no", "off", "")
     extra = "mass-erase:force" if combined else ""
     what = "загрузчик + mass-erase" if combined else "загрузчик"

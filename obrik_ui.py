@@ -232,7 +232,7 @@ class App:
         self.action_lbl = tk.Label(st, text="Готов к работе.", bg="#f4f7f9",
                                    fg="#333", anchor="w", font=("", 10))
         self.action_lbl.pack(fill="x")
-        self.progress = ttk.Progressbar(st, mode="indeterminate")
+        self.progress = ttk.Progressbar(st, mode="determinate", maximum=100)
         self.need_lbl = tk.Label(st, text="", bg="#fff3cd", fg="#7a5b00",
                                  anchor="w", justify="left", padx=10, pady=8,
                                  font=("", 10, "bold"), wraplength=560)
@@ -384,7 +384,7 @@ class App:
             what += f" — {dr.get('name', '?')}"
         self.action_lbl.config(text=f"Выполняется: {what}…")
         self.progress.pack(fill="x", pady=(4, 0))
-        self.progress.start(12)
+        self.progress["value"] = 0
         threading.Thread(target=self._reader, args=(self.proc,),
                          daemon=True).start()
         self._set_running(True)
@@ -453,6 +453,8 @@ class App:
         if drained:
             self._refresh_steps()
             self._refresh_action()
+        if self.proc:
+            self.progress["value"] = self._progress_value()
         if exited is not None:
             self._finished(exited)
         self._check_prompt()
@@ -525,6 +527,23 @@ class App:
         for n, badge in self.step_rows.items():
             badge.config(text=BADGE.get(self.steps_state.get(n), "▫"))
 
+    def _progress_value(self):
+        """Заполнение бара: завершённые шаги + доля текущего (по % или N/M
+        из последней строки вывода)."""
+        total = len(self.steps_state) or 1
+        done = sum(1 for s in self.steps_state.values() if s == "ok")
+        running = any(s == "run" for s in self.steps_state.values())
+        frac = 0.0
+        line = self.cur_line
+        mp = re.search(r"(\d+(?:\.\d+)?)\s*%", line)
+        mr = re.search(r"(\d+)\s*/\s*(\d+)", line)
+        if mp:
+            frac = min(1.0, float(mp.group(1)) / 100)
+        elif mr and int(mr.group(2)) > 0:
+            frac = min(1.0, int(mr.group(1)) / int(mr.group(2)))
+        val = (done + (frac if running else 0)) / total * 100
+        return max(0.0, min(100.0, val))
+
     def _refresh_action(self):
         line = self.cur_line.strip() or \
             next((l.strip() for l in reversed(self.log_lines)
@@ -540,7 +559,6 @@ class App:
                 f.write("\n".join(self.log_lines + [self.cur_line]))
         except OSError:
             pass
-        self.progress.stop()
         self.progress.pack_forget()
         self._clear_prompt()
         self._set_running(False)
