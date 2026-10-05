@@ -8,7 +8,7 @@ echo "=== obrik-tools: установка ==="
 # 1. системные зависимости
 echo "[1/4] системные пакеты..."
 sudo apt-get update -qq
-sudo apt-get install -y -qq dfu-util python3-pip python3-serial 2>/dev/null
+sudo apt-get install -y -qq dfu-util python3-pip python3-serial python3-tk 2>/dev/null
 
 # 2. python-зависимости
 echo "[2/4] python-зависимости..."
