@@ -180,6 +180,8 @@ class App:
                                    command=lambda: self.run("1,2,3,4"))
         self.full_btn.pack(fill="x")
 
+        # шаги — только индикаторы хода: если что-то уже стоит на плате,
+        # скрипт сам пропустит лишнее
         self.step_rows = {}
         steps_fr = tk.Frame(r, bg="#ffffff", bd=0, highlightthickness=1,
                             highlightbackground="#e0e6ea")
@@ -191,10 +193,7 @@ class App:
             badge.pack(side="left")
             tk.Label(row, text=f"Шаг {n} — {name}", bg="#ffffff",
                      anchor="w").pack(side="left", fill="x", expand=True)
-            btn = ttk.Button(row, text="Выполнить", width=11,
-                             command=lambda n=n: self.run(str(n)))
-            btn.pack(side="right")
-            self.step_rows[n] = (badge, btn)
+            self.step_rows[n] = badge
 
         aux = ttk.Frame(r, padding=(12, 0))
         aux.pack(fill="x")
@@ -291,10 +290,8 @@ class App:
                 text="✓ Файлы прошивки и параметров на месте",
                 fg="#1d6b32")
         if not self.proc:
-            state = "normal" if self.files_ok else "disabled"
-            self.full_btn.config(state=state)
-            for _, btn in self.step_rows.values():
-                btn.config(state=state)
+            self.full_btn.config(
+                state="normal" if self.files_ok else "disabled")
 
     @staticmethod
     def _sel(table, shown_name):
@@ -372,8 +369,6 @@ class App:
         state = "disabled" if running else "normal"
         for w in (self.full_btn, self.erase_btn):
             w.config(state=state)
-        for _, btn in self.step_rows.values():
-            btn.config(state=state)
         self.drone_cb.config(state="disabled" if running else "readonly")
         self.fc_cb.config(state="disabled" if running else "readonly")
         self.abort_btn.config(state="normal" if running else "disabled")
@@ -480,7 +475,7 @@ class App:
         self.board_lbl.config(text=txt, bg=bg, fg=fg)
 
     def _refresh_steps(self):
-        for n, (badge, _) in self.step_rows.items():
+        for n, badge in self.step_rows.items():
             badge.config(text=BADGE.get(self.steps_state.get(n), "▫"))
 
     def _refresh_action(self):
