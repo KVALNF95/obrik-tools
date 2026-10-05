@@ -394,6 +394,24 @@ def parse_px4_git(fw_path):
         return None
 
 
+def _git_candidates(ver):
+    """Вытащить git-хэш из AUTOPILOT_VERSION.flight_custom_version.
+    PX4 кладёт его то ASCII-текстом, то бинарно задом наперёд
+    (little-endian) — возвращаем оба прочтения."""
+    if ver is None:
+        return []
+    try:
+        raw = bytes(ver.flight_custom_version)
+    except Exception:
+        return []
+    out = []
+    txt = raw.split(b'\x00')[0].decode('ascii', 'replace').strip().lower()
+    if re.fullmatch(r"[0-9a-f]{6,}", txt):
+        out.append(txt)
+    out.append(raw[::-1].rstrip(b'\x00').hex())   # бинарный вариант
+    return [c for c in out if c]
+
+
 def probe_running_px4(cfg, fw_path):
     """Опрос запущенной платы БЕЗ захода в DFU. Возвращает:
       'same' — на плате PX4 и git-хэш совпал с нашим образом;
@@ -420,20 +438,20 @@ def probe_running_px4(cfg, fw_path):
         # но его загрузчик px_uploader не поймёт — для него путь через DFU
         if getattr(hb, "autopilot", None) != 12:
             return None
-        m.mav.command_long_send(m.target_system or 1, m.target_component or 1,
-                                520, 0, 1, 0, 0, 0, 0, 0, 0)
+        ts = m.target_system or 1
+        tc = m.target_component or 1
+        # запрос версии: сначала MAV_CMD_REQUEST_MESSAGE (512, id 148) —
+        # на него PX4 v1.15 отвечает стабильно; 520 — запасной вариант
+        m.mav.command_long_send(ts, tc, 512, 0, 148, 0, 0, 0, 0, 0, 0)
         ver = m.recv_match(type='AUTOPILOT_VERSION', blocking=True, timeout=5)
-        running_git = None
-        if ver is not None:
-            try:
-                running_git = bytes(ver.flight_custom_version)\
-                    .split(b'\x00')[0].decode('ascii', 'replace').strip()
-            except Exception:
-                running_git = None
+        if ver is None:
+            m.mav.command_long_send(ts, tc, 520, 0, 1, 0, 0, 0, 0, 0, 0)
+            ver = m.recv_match(type='AUTOPILOT_VERSION', blocking=True,
+                               timeout=5)
         want_git = parse_px4_git(fw_path)
-        if running_git and want_git and running_git[:6] \
-                and running_git[:6] in want_git:
-            return "same"
+        for cand in _git_candidates(ver):
+            if want_git and cand[:7] and cand[:7] in want_git:
+                return "same"
         return "px4"
     finally:
         try:
@@ -468,29 +486,28 @@ def verify_firmware_running(cfg, fw_path, port=None):
         return False
     print("  ✓ heartbeat получен — PX4 запущен")
 
-    # запрос AUTOPILOT_VERSION (MAV_CMD_REQUEST_AUTOPILOT_CAPABILITIES = 520)
-    m.mav.command_long_send(m.target_system or 1, m.target_component or 1,
-                            520, 0, 1, 0, 0, 0, 0, 0, 0)
+    # запрос AUTOPILOT_VERSION: сначала REQUEST_MESSAGE (512), затем 520
+    ts, tc = m.target_system or 1, m.target_component or 1
+    m.mav.command_long_send(ts, tc, 512, 0, 148, 0, 0, 0, 0, 0, 0)
     ver = m.recv_match(type='AUTOPILOT_VERSION', blocking=True, timeout=5)
-    running_git = None
+    if ver is None:
+        m.mav.command_long_send(ts, tc, 520, 0, 1, 0, 0, 0, 0, 0, 0)
+        ver = m.recv_match(type='AUTOPILOT_VERSION', blocking=True, timeout=5)
+    cands = _git_candidates(ver)
     if ver is not None:
-        try:
-            running_git = bytes(ver.flight_custom_version).split(b'\x00')[0]\
-                .decode('ascii', 'replace').strip()
-        except Exception:
-            running_git = None
-        print(f"  ✓ AUTOPILOT_VERSION получен (git на плате: {running_git or '?'})")
+        print(f"  ✓ AUTOPILOT_VERSION получен (git на плате: "
+              f"{cands[0] if cands else '?'})")
     else:
         print("  ⚠ AUTOPILOT_VERSION не пришёл, но heartbeat есть — считаю запуск успешным")
     m.close()
 
     # мягкая сверка git-хэша с образом (не блокирует — формат хэша PX4 капризный)
     want_git = parse_px4_git(fw_path)
-    if running_git and want_git:
-        if running_git[:6] and running_git[:6] in want_git:
-            print(f"  ✓ git-хэш совпал с образом ({running_git})")
+    if cands and want_git:
+        if any(c[:7] and c[:7] in want_git for c in cands):
+            print(f"  ✓ git-хэш совпал с образом ({want_git})")
         else:
-            print(f"  ⚠ git на плате ({running_git}) не найден в образе ({want_git}) —")
+            print(f"  ⚠ git на плате ({cands[0]}) не найден в образе ({want_git}) —")
             print("     убедитесь, что залит нужный .px4")
     return True
 
