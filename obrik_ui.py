@@ -114,6 +114,9 @@ def classify_prompt(tail, context):
     if "когда плата подключена" in tail or "зажимать НЕ нужно" in ctx:
         return "plug", ("Подключите плату по USB — кнопку BOOT зажимать "
                         "не нужно (если понадобится, спрошу отдельно).")
+    if "когда переткнули" in tail or "не отвечает по MAVLink" in ctx:
+        return "replug", ("Плата не отвечает по MAVLink. Переткните USB "
+                          "(без BOOT) и подождите ~15 секунд.")
     if "загрузилась" in ctx or "переподключена" in ctx:
         return "running", ("Переподключите USB БЕЗ кнопки BOOT "
                            "и дождитесь загрузки платы.")
@@ -584,6 +587,7 @@ class App:
             # новая пауза
             self.prompt_key = tail
             self.asked = False
+            self.replug_gone = False
             ctx = "\n".join(self.log_lines[-12:])
             self.prompt_kind, human = classify_prompt(tail, ctx)
             self.need_lbl.config(text="Требуется: " + human)
@@ -597,6 +601,17 @@ class App:
                     "следующими шагами?")
                 self.send_stdin("\n" if cont else "n\n")
                 return
+        # для «переткните» ждём, пока плата сначала пропадёт, потом вернётся
+        if self.prompt_kind == "replug":
+            if self.board == "none":
+                self.replug_gone = True
+            if getattr(self, "replug_gone", False) and self.board == "running" \
+                    and not self.asked:
+                self.asked = True
+                if messagebox.askyesno("Плата переподключена",
+                                       "Плата снова загрузилась.\nПродолжаем?"):
+                    self.send_stdin("\n")
+            return
         # автодетект готовности платы
         ready = (self.prompt_kind in ("dfu", "running")
                  and self.board == self.prompt_kind) \

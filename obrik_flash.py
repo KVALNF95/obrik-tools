@@ -538,30 +538,32 @@ def _git_candidates(ver):
 
 def probe_running_px4(cfg, fw_path):
     """Опрос запущенной платы БЕЗ захода в DFU. Возвращает:
-      'same' — на плате PX4 и git-хэш совпал с нашим образом;
-      'px4'  — на плате PX4, но другая/неизвестная версия
-               (загрузчик PX4 рабочий → можно шить px_uploader'ом без BOOT);
-      None   — чужая прошивка (ArduPilot/Betaflight), нет ответа или
-               порт занят (например, QGroundControl)."""
+      'same'    — на плате PX4 и git-хэш совпал с нашим образом;
+      'px4'     — на плате PX4, другая/неизвестная версия (загрузчик PX4
+                  рабочий → шьём px_uploader'ом без BOOT);
+      'foreign' — есть heartbeat, но это не PX4 (ArduPilot/Betaflight) →
+                  перепрошивка только через DFU (BOOT);
+      'silent'  — порт есть, но плата не отвечает по MAVLink (молчит,
+                  завис, порт занят) — НЕ значит «чужая прошивка»."""
     try:
         from pymavlink import mavutil
     except ImportError:
-        return None
+        return "silent"
     port = find_tty()
     if not port:
-        return None
+        return "silent"
     try:
         m = mavutil.mavlink_connection(port, baud=int(cfg.get("baud", "57600")))
     except Exception:
-        return None
+        return "silent"
     try:
         hb = m.wait_heartbeat(timeout=10)
         if hb is None:
-            return None
+            return "silent"
         # MAV_AUTOPILOT_PX4 = 12; ArduPilot (=3) тоже говорит на MAVLink,
         # но его загрузчик px_uploader не поймёт — для него путь через DFU
         if getattr(hb, "autopilot", None) != 12:
-            return None
+            return "foreign"
         ts = m.target_system or 1
         tc = m.target_component or 1
         # запрос версии: сначала MAV_CMD_REQUEST_MESSAGE (512, id 148) —
@@ -839,6 +841,15 @@ def step_flash_bootloader(cfg):
         # загрузилась), перепрошивать его незачем, BOOT не нужен
         print("  Плата запущена — проверяю по MAVLink, что на ней стоит...")
         kind = probe_running_px4(cfg, cfg["firmware"])
+        # молчит — не вывод «чужая прошивка»: дать переткнуть и опросить ещё раз
+        if kind == "silent":
+            print("  ⚠ плата определяется по USB, но не отвечает по MAVLink")
+            print("  >>> Переткните USB (кнопку BOOT НЕ нажимать) и подождите "
+                  "~15 секунд, пока плата загрузится.")
+            input("  Нажмите Enter, когда переткнули...")
+            time.sleep(3)
+            if detect_board_state() == "running":
+                kind = probe_running_px4(cfg, cfg["firmware"])
         if kind == "same":
             print("  ✓ на плате уже наша прошивка PX4 (git-хэш совпал)")
             print("  ✓ плата с ней загружается — значит загрузчик исправен")
@@ -852,8 +863,12 @@ def step_flash_bootloader(cfg):
                   "BOOT-режим не нужен")
             cfg["_fw_px4_running"] = True
             return True
-        print("  На плате чужая прошивка (не PX4) — загрузчик "
-              "прошивается только через DFU.")
+        if kind == "foreign":
+            print("  На плате чужая прошивка (не PX4) — загрузчик "
+                  "прошивается только через DFU.")
+        else:  # silent и после переткивания
+            print("  Плата так и не ответила по MAVLink. Возможно, прошивка "
+                  "повреждена — перепрошьём через DFU (BOOT).")
 
     if state == "dfu":
         print("  Плата обнаружена в режиме DFU.")
@@ -995,8 +1010,11 @@ def step_flash_firmware(cfg):
             return True
         if kind == "px4":
             return _flash_via_uploader(cfg, fw)
-        print("  На плате чужая прошивка (не PX4) — прошиваем только "
-              "через DFU.")
+        if kind == "foreign":
+            print("  На плате чужая прошивка (не PX4) — прошиваем только "
+                  "через DFU.")
+        else:
+            print("  Плата не отвечает по MAVLink — прошиваем через DFU.")
     if state != "dfu":
         if state == "none":
             print("  Плата не обнаружена.")
