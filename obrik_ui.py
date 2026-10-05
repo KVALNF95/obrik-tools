@@ -107,6 +107,9 @@ def classify_prompt(tail, context):
     ctx = context + "\n" + tail
     if "АКБ" in ctx:
         return "akb", "Подключите АКБ (регуляторы должны получить питание)."
+    if "когда плата подключена" in tail or "зажимать НЕ нужно" in ctx:
+        return "plug", ("Подключите плату по USB — кнопку BOOT зажимать "
+                        "не нужно (если понадобится, спрошу отдельно).")
     if "загрузилась" in ctx or "переподключена" in ctx:
         return "running", ("Переподключите USB БЕЗ кнопки BOOT "
                            "и дождитесь загрузки платы.")
@@ -511,6 +514,11 @@ class App:
 
     def _finished(self, code):
         self.proc = None
+        try:   # полный лог последнего запуска — для разбора проблем
+            with open("/tmp/obrik_ui_last.log", "w", encoding="utf-8") as f:
+                f.write("\n".join(self.log_lines + [self.cur_line]))
+        except OSError:
+            pass
         self.progress.stop()
         self.progress.pack_forget()
         self._clear_prompt()
@@ -557,11 +565,14 @@ class App:
                 self.send_stdin("\n" if cont else "n\n")
                 return
         # автодетект готовности платы
-        if self.prompt_kind in ("dfu", "running") and not self.asked \
-                and self.board == self.prompt_kind:
+        ready = (self.prompt_kind in ("dfu", "running")
+                 and self.board == self.prompt_kind) \
+            or (self.prompt_kind == "plug" and self.board != "none")
+        if ready and not self.asked:
             self.asked = True
-            name = ("в BOOT-режиме (DFU)" if self.prompt_kind == "dfu"
-                    else "подключена и загрузилась")
+            name = {"dfu": "в BOOT-режиме (DFU)",
+                    "running": "подключена и загрузилась",
+                    "plug": "обнаружена"}[self.prompt_kind]
             if messagebox.askyesno("Плата обнаружена",
                                    f"Плата {name}.\nПродолжаем?"):
                 self.send_stdin("\n")
