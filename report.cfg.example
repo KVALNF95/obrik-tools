@@ -23,6 +23,9 @@ tg_chat  = 111222333
 # mail_to   = kuznetsovvova95@gmail.com    # куда слать отчёты
 # mail_from = your_login@yandex.ru
 
-# ── Вариант 3: произвольный вебхук (POST JSON {"text": "..."}) ──
-# method      = webhook
-# webhook_url = https://example.com/your-hook
+# ── Вариант 3: вебхук на свой relay-сервер (БЕЗ секретов на ноуте) ──
+# На ноуте — только URL и токен (им можно лишь отправить отчёт, легко сменить).
+# Почтовые пароли живут на сервере (см. report_relay.py / relay.cfg).
+# method        = webhook
+# webhook_url   = https://report.ваш-домен/report
+# webhook_token = тот_же_токен_что_в_relay.cfg

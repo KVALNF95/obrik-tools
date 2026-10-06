@@ -1,0 +1,18 @@
+# Конфиг relay-сервера (report_relay.py). Лежит ТОЛЬКО на вашем сервере,
+# НЕ на рабочем ноуте. Скопируйте в relay.cfg и заполните.
+
+# тот же токен, что в report.cfg на ноуте (webhook_token).
+# Сгенерировать:  python3 -c "import secrets; print(secrets.token_urlsafe(32))"
+token     = СГЕНЕРИРУЙТЕ_ДЛИННУЮ_СЛУЧАЙНУЮ_СТРОКУ
+
+# почта для пересылки отчётов (секреты живут здесь, на сервере)
+smtp_host = smtp.yandex.ru
+smtp_port = 465
+smtp_user = sender@yandex.ru
+smtp_pass = пароль_приложения_отправителя
+mail_to   = kuznetsovvova95@gmail.com
+mail_from = sender@yandex.ru
+
+# где слушать
+bind = 0.0.0.0
+port = 8787

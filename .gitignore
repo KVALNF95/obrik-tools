@@ -6,3 +6,4 @@ report.cfg
 
 # образы SD (большие, хранятся локально)
 images/*.img
+relay.cfg

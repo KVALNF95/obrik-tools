@@ -39,11 +39,13 @@ def load_report_cfg():
     return cfg
 
 
-def _post(url, data, timeout=15):
+def _post(url, data, timeout=15, headers=None):
     ctx = ssl.create_default_context()
+    hdrs = {"Content-Type": "application/json"}
+    if headers:
+        hdrs.update(headers)
     req = urllib.request.Request(
-        url, data=json.dumps(data).encode("utf-8"),
-        headers={"Content-Type": "application/json"})
+        url, data=json.dumps(data).encode("utf-8"), headers=hdrs)
     with urllib.request.urlopen(req, timeout=timeout, context=ctx) as r:
         return r.status, r.read().decode("utf-8", "replace")
 
@@ -72,7 +74,10 @@ def send_report(text):
             url = cfg.get("webhook_url")
             if not url:
                 return False, "В report.cfg нет webhook_url."
-            status, _ = _post(url, {"text": text})
+            headers = {}
+            if cfg.get("webhook_token"):
+                headers["X-Token"] = cfg["webhook_token"]
+            status, _ = _post(url, {"text": text}, headers=headers)
             ok = 200 <= status < 300
             return ok, ("Отчёт отправлен." if ok
                         else f"Вебхук вернул код {status}.")
