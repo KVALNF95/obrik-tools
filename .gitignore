@@ -3,3 +3,6 @@ __pycache__/
 dist/
 .sentry-native/
 report.cfg
+
+# образы SD (большие, хранятся локально)
+images/*.img

@@ -26,7 +26,7 @@ import time
 
 try:
     import tkinter as tk
-    from tkinter import ttk, messagebox
+    from tkinter import ttk, messagebox, simpledialog
 except ImportError:
     print("Нужен tkinter:  sudo apt install python3-tk")
     sys.exit(1)
@@ -247,6 +247,8 @@ class App:
         self.abort_btn = ttk.Button(aux, text="Прервать", command=self.abort,
                                     state="disabled")
         self.abort_btn.pack(side="right")
+        ttk.Button(aux, text="💾 Записать образ на SD-карту",
+                   command=self.sd_dialog).pack(side="left")
 
         # автоматическая проверка файлов выбранного дрона/полётника
         self.check_lbl = tk.Label(r, text="", bg="#f4f7f9", anchor="w",
@@ -479,6 +481,172 @@ class App:
                 f"Дрон: {dr} | Плата: {fc} | Хост: {host}\n"
                 f"\nСообщение:\n{msg}\n"
                 f"\n— журнал последнего запуска —\n{log_tail}")
+
+    # ── запись образа на SD-карту ────────────────────────────────
+
+    def _drone_images(self):
+        """Список (имя, путь) образов выбранного дрона из drones.cfg."""
+        dr = self._sel(self.drones, self.drone_var.get())
+        out = []
+        for item in (dr.get("images", "") if dr else "").split(","):
+            item = item.strip()
+            if ":" in item:
+                name, path = item.split(":", 1)
+                out.append((name.strip(), path.strip()))
+            elif item:
+                out.append((os.path.basename(item), item))
+        return out
+
+    def sd_dialog(self):
+        imgs = self._drone_images()
+        win = tk.Toplevel(self.root)
+        win.title("Запись образа на SD-карту")
+        win.configure(bg="#f4f7f9")
+        win.transient(self.root)
+        win.grab_set()
+        win.minsize(560, 360)
+
+        top = ttk.Frame(win, padding=12)
+        top.pack(fill="x")
+        ttk.Label(top, text="Образ:").grid(row=0, column=0, sticky="w")
+        img_var = tk.StringVar()
+        img_cb = ttk.Combobox(top, textvariable=img_var, state="readonly",
+                              width=36, values=[n for n, _ in imgs])
+        img_cb.grid(row=0, column=1, padx=6, sticky="w")
+        if imgs:
+            img_cb.current(0)
+        ttk.Label(top, text="Сколько карт:").grid(row=1, column=0, sticky="w",
+                                                  pady=(8, 0))
+        cnt_var = tk.StringVar(value="все вставленные")
+        cnt_cb = ttk.Combobox(top, textvariable=cnt_var, state="readonly",
+                              width=18, values=["все вставленные"] +
+                              [str(i) for i in range(1, 9)])
+        cnt_cb.grid(row=1, column=1, padx=6, sticky="w", pady=(8, 0))
+
+        info = tk.Label(win, text="", bg="#f4f7f9", anchor="w", justify="left",
+                        padx=12, fg="#555")
+        info.pack(fill="x")
+
+        rows = ttk.Frame(win, padding=(12, 6))
+        rows.pack(fill="both", expand=True)
+        self._sd_bars = {}      # dev → (progressbar, label)
+
+        bar = ttk.Frame(win, padding=12)
+        bar.pack(fill="x")
+        flash_btn = ttk.Button(bar, text="⚠ Прошить (сотрёт карты)")
+        flash_btn.pack(side="right")
+        ttk.Button(bar, text="Закрыть",
+                   command=win.destroy).pack(side="right", padx=6)
+
+        def start():
+            sel = dict(imgs).get(img_var.get())
+            if not sel:
+                info.config(text="Нет образа для этого дрона — заполните "
+                                 "images в drones.cfg.", fg="#aa3333")
+                return
+            path = sel if os.path.isabs(sel) else os.path.join(HERE, sel)
+            path = os.path.expanduser(path)
+            if not os.path.exists(path):
+                info.config(text=f"Файл образа не найден: {sel}", fg="#aa3333")
+                return
+            pw = simpledialog.askstring(
+                "Права администратора",
+                "Пароль sudo (нужен для записи на диск):",
+                show="*", parent=win)
+            if not pw:
+                return
+            flash_btn.config(state="disabled")
+            cnt = "" if cnt_var.get().startswith("все") else cnt_var.get()
+            info.config(text="Запускаю запись… Вставьте карты, если ещё нет.",
+                        fg="#555")
+            for w in rows.winfo_children():
+                w.destroy()
+            self._sd_bars = {}
+            threading.Thread(target=self._sd_worker,
+                             args=(path, cnt, pw, win, rows, info, flash_btn),
+                             daemon=True).start()
+
+        flash_btn.config(command=start)
+
+    def _sd_worker(self, img, cnt, pw, win, rows, info, flash_btn):
+        script = os.path.join(HERE, "flash_sd.sh")
+        cmd = ["sudo", "-S", "-p", "", "bash", script, img]
+        if cnt:
+            cmd.append(cnt)
+        cmd += ["--ui", "--verify"]
+        try:
+            proc = subprocess.Popen(cmd, stdin=subprocess.PIPE,
+                                    stdout=subprocess.PIPE,
+                                    stderr=subprocess.STDOUT, text=True)
+        except Exception as e:
+            self.root.after(0, lambda: info.config(
+                text=f"Не удалось запустить: {e}", fg="#aa3333"))
+            return
+        try:
+            proc.stdin.write(pw + "\n")
+            proc.stdin.flush()
+        except Exception:
+            pass
+        q = queue.Queue()
+        threading.Thread(target=self._sd_reader, args=(proc, q),
+                         daemon=True).start()
+
+        def poll():
+            done = False
+            while True:
+                try:
+                    line = q.get_nowait()
+                except queue.Empty:
+                    break
+                if line is None:
+                    done = True
+                    break
+                self._sd_line(line, rows, info)
+            if done:
+                code = proc.returncode
+                if code == 0:
+                    info.config(text="✅ Готово. Карты можно вынимать.",
+                                fg="#1d6b32")
+                else:
+                    info.config(text="❌ Запись завершилась с ошибкой "
+                                     "(см. строки карт).", fg="#aa3333")
+                flash_btn.config(state="normal")
+                return
+            win.after(200, poll)
+        win.after(200, poll)
+
+    def _sd_reader(self, proc, q):
+        for line in proc.stdout:
+            q.put(line.rstrip("\n"))
+        proc.wait()
+        q.put(None)
+
+    def _sd_line(self, line, rows, info):
+        if line.startswith("UIPROG|"):
+            _, dev, b, total, state = line.split("|", 4)
+            b, total = int(b), int(total) or 1
+            pct = int(b * 100 / total)
+            names = {"write": "запись", "verify": "проверка", "ok": "ГОТОВО",
+                     "start": "подготовка", "fail-write": "ОШИБКА ЗАПИСИ",
+                     "fail-verify": "НЕ СОШЛОСЬ С ОБРАЗОМ"}
+            st = names.get(state, state)
+            if dev not in self._sd_bars:
+                row = ttk.Frame(rows)
+                row.pack(fill="x", pady=3)
+                ttk.Label(row, text=dev, width=12).pack(side="left")
+                pb = ttk.Progressbar(row, mode="determinate", maximum=100,
+                                     length=260,
+                                     style="Green.Horizontal.TProgressbar")
+                pb.pack(side="left", padx=6)
+                lb = ttk.Label(row, text="", width=22)
+                lb.pack(side="left")
+                self._sd_bars[dev] = (pb, lb)
+            pb, lb = self._sd_bars[dev]
+            pb["value"] = pct
+            lb.config(text=f"{pct}%  {st}")
+        elif line.strip() and not line.startswith("UIEND"):
+            # прочие сообщения скрипта (ожидание карт, ошибки) — в инфо-строку
+            info.config(text=line.strip()[:90])
 
     # ── запуск/остановка ─────────────────────────────────────────
 
