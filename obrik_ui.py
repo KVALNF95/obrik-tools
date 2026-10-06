@@ -618,8 +618,15 @@ class App:
                 self._sd_line(line)
             if done:
                 ok = proc.returncode == 0
-                self._sd_done("✅ Готово. Карты можно вынимать." if ok
-                              else "❌ Запись с ошибкой (см. строки карт).", ok)
+                if ok:
+                    msg = "✅ Готово. Карты можно вынимать."
+                elif not self._sd_bars:
+                    # ни одной карты не появилось — её просто не вставили
+                    msg = ("⚠ SD-карта не вставлена (или не распознана). "
+                           "Вставьте карту и нажмите «Прошить SD».")
+                else:
+                    msg = "❌ Запись с ошибкой (см. строки карт)."
+                self._sd_done(msg, ok)
                 return
             self.root.after(200, poll)
         self.root.after(200, poll)
