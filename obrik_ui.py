@@ -139,6 +139,7 @@ class App:
         self.log_lines = []
         self.cur_line = ""          # последняя строка вывода (живой статус)
         self.steps_state = {}
+        self._step_frac = 0.0       # доля текущего шага для прогресс-бара
         self.prompt_key = None      # текущая пауза скрипта (текст)
         self.prompt_kind = None
         self.asked = False          # уже показывали окошко для этой паузы
@@ -165,6 +166,10 @@ class App:
                                          ("disabled", "#9fd9ef")])
         s.configure("Head.TLabel", background=ACCENT, foreground="#fff",
                     font=("", 13, "bold"), padding=10)
+        s.configure("Green.Horizontal.TProgressbar",
+                    troughcolor="#e3e7ea", bordercolor="#e3e7ea",
+                    background="#3bb24a", lightcolor="#3bb24a",
+                    darkcolor="#3bb24a", thickness=18)
 
         ttk.Label(r, text="Obrik Tools — прошивка полётника",
                   style="Head.TLabel", anchor="w").pack(fill="x")
@@ -232,7 +237,8 @@ class App:
         self.action_lbl = tk.Label(st, text="Готов к работе.", bg="#f4f7f9",
                                    fg="#333", anchor="w", font=("", 10))
         self.action_lbl.pack(fill="x")
-        self.progress = ttk.Progressbar(st, mode="determinate", maximum=100)
+        self.progress = ttk.Progressbar(st, mode="determinate", maximum=100,
+                                        style="Green.Horizontal.TProgressbar")
         self.need_lbl = tk.Label(st, text="", bg="#fff3cd", fg="#7a5b00",
                                  anchor="w", justify="left", padx=10, pady=8,
                                  font=("", 10, "bold"), wraplength=560)
@@ -394,6 +400,7 @@ class App:
         wanted = {int(x) for x in steps.split(",") if x.strip().isdigit()}
         self.steps_state = {n: "wait" for n in wanted}
         self.aborted = False
+        self._step_frac = 0.0
         self.log_lines, self.cur_line = [], ""
         self._clear_prompt()
         what = "проверка файлов" if dry else \
@@ -506,6 +513,7 @@ class App:
                 if k != n and st == "run":
                     self.steps_state[k] = "ok"
             self.steps_state[n] = "run"
+            self._step_frac = 0.0   # новый шаг — бар с нуля
         if "шаги 1–2 пропущены" in line:
             self.steps_state[1] = self.steps_state[2] = "ok"
         m = re.search(r"шаг (\d+) \([^)]*\): (✓ OK|✗ ошибка)", line)
@@ -546,12 +554,9 @@ class App:
             badge.config(text=BADGE.get(self.steps_state.get(n), "▫"))
 
     def _progress_value(self):
-        """Заполнение бара: завершённые шаги + доля текущего (по % или N/M
-        из последней строки вывода)."""
-        total = len(self.steps_state) or 1
-        done = sum(1 for s in self.steps_state.values() if s == "ok")
-        running = any(s == "run" for s in self.steps_state.values())
-        frac = 0.0
+        """Заполнение бара в пределах ТЕКУЩЕГО шага (0–100%). На каждый новый
+        шаг бар начинается заново; завершённый шаг кратко показывается полным."""
+        # процент внутри шага — из последней строки (%, либо N/M)
         line = self.cur_line
         mp = re.search(r"(\d+(?:\.\d+)?)\s*%", line)
         mr = re.search(r"(\d+)\s*/\s*(\d+)", line)
@@ -559,16 +564,22 @@ class App:
             frac = min(1.0, float(mp.group(1)) / 100)
         elif mr and int(mr.group(2)) > 0:
             frac = min(1.0, int(mr.group(1)) / int(mr.group(2)))
-        val = (done + (frac if running else 0)) / total * 100
-        return max(0.0, min(100.0, val))
+        else:
+            frac = self._step_frac   # нет числа в строке — держим прежнее
+        self._step_frac = frac
+        return frac * 100
 
     def _refresh_action(self):
         line = self.cur_line.strip() or \
             next((l.strip() for l in reversed(self.log_lines)
                   if l.strip()), "")
+        running = next((n for n, s in self.steps_state.items()
+                        if s == "run"), None)
+        pct = int(self.progress["value"])
+        prefix = f"Шаг {running} — {pct}%  ·  " if running else ""
         if line and self.proc:
-            self.action_lbl.config(
-                text=(line[:100] + "…") if len(line) > 100 else line)
+            body = (line[:90] + "…") if len(line) > 90 else line
+            self.action_lbl.config(text=prefix + body)
 
     def _finished(self, code):
         self.proc = None
