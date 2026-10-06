@@ -38,4 +38,19 @@ if [ -d "$DESK" ]; then
     gio set "$DESK/sverk-tools.desktop" metadata::trusted true 2>/dev/null || true
 fi
 
-echo "Готово. Ярлык «Sverk Tools» в меню приложений и на рабочем столе."
+# 3) закрепить на панели (GNOME dash → favorite-apps)
+if command -v gsettings >/dev/null 2>&1; then
+    cur="$(gsettings get org.gnome.shell favorite-apps 2>/dev/null)"
+    if [ -n "$cur" ] && ! echo "$cur" | grep -q "sverk-tools.desktop"; then
+        new="$(echo "$cur" | sed "s/]$/, 'sverk-tools.desktop']/")"
+        # если список был пустым '[]'
+        [ "$cur" = "@as []" ] && new="['sverk-tools.desktop']"
+        gsettings set org.gnome.shell favorite-apps "$new" 2>/dev/null \
+            && echo "Закреплено на панели (dash)." \
+            || echo "Не удалось закрепить на панели (не GNOME?)."
+    else
+        echo "Уже закреплено на панели (или dash недоступен)."
+    fi
+fi
+
+echo "Готово. Ярлык «Sverk Tools» в меню приложений, на рабочем столе и на панели."

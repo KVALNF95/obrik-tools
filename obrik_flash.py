@@ -1180,7 +1180,7 @@ def step_beacon_delay(cfg):
     # ждём АКБ: как только полётник покажет ≥ 8 В — начинаем сами, без Enter.
     # Опрашиваем напряжение по кругу; Enter не нужен (UI может прервать).
     min_v = float(cfg.get("beacon_min_voltage", "8.0"))
-    print(f"  Подключите АКБ. Начну, как только напряжение будет ≥ {min_v:.0f} В.")
+    print("  Подключите АКБ — отключение писка начнётся автоматически.")
     v = battery_voltage(m)
     waited = 0
     while (v is None or v < min_v) and waited < 600:
@@ -1325,14 +1325,16 @@ def step_load_params(cfg):
                 noresp.append(pname)
 
         if idx % 50 == 49 or idx == total - 1:
-            print(f"  прогресс {idx + 1}/{total}: "
+            # заливка занимает 0–80% шага; остальное — на save+ребут+сверку
+            pct = int((idx + 1) / total * 80)
+            print(f"  прогресс {pct}% — залито {idx + 1}/{total}: "
                   f"ok={len(ok_list)} (без изменений {skipped_same}) "
                   f"mismatch={len(mismatch)} нет_ответа={len(noresp)}")
 
     # сохранить параметры в flash. PX4 и сам автосохраняет изменённые параметры
     # (autosave), 'param save' здесь — дублирующая страховка, поэтому пустой
     # ответ nsh (SERIAL_CONTROL на этой связке глючит) не считается ошибкой.
-    print("  сохраняю параметры в flash (param save)...")
+    print("  прогресс 82% — сохраняю параметры в flash (param save)...")
     save_out = nsh_send(m, "param save", timeout_s=6)
     time.sleep(2)
     if not save_out.strip():
@@ -1349,7 +1351,7 @@ def step_load_params(cfg):
                     print(f"    | {line.strip()[:130]}")
 
     # ── контрольная перезагрузка: доказать, что параметры СОХРАНИЛИСЬ ──
-    print("  перезагружаю полётник и сверяю параметры после рестарта...")
+    print("  прогресс 85% — перезагружаю полётник и сверяю параметры...")
     m.mav.command_long_send(m.target_system or 1, m.target_component or 1,
                             246, 0, 1, 0, 0, 0, 0, 0, 0)  # MAV_CMD_PREFLIGHT_REBOOT_SHUTDOWN
     close_mavlink()
@@ -1362,6 +1364,7 @@ def step_load_params(cfg):
     else:
         try:
             time.sleep(1)
+            print("  прогресс 95% — читаю параметры после перезагрузки...")
             after = fetch_all_params(m)
             print(f"  считано после перезагрузки: {len(after)}")
             confirmed = set(ok_list)
@@ -1402,6 +1405,7 @@ def step_load_params(cfg):
             print(f"  ⚠ сверка после перезагрузки не удалась: {e}")
 
     # ── отчёт ──
+    print("  прогресс 100% — параметры загружены")
     print(f"\n  подтверждено (readback): {len(ok_list)}/{total} "
           f"(из них уже были верными: {skipped_same})")
     if mismatch:

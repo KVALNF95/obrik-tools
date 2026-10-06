@@ -587,17 +587,23 @@ class App:
 
     def _battery_notice(self):
         """Ожидание АКБ идёт без stdin-паузы (скрипт сам ловит напряжение) —
-        поэтому показываем заметную жёлтую плашку, пока плата не увидит ≥8 В."""
-        recent = "\n".join(self.log_lines[-5:] + [self.cur_line])
-        waiting = ("жду АКБ" in recent or
-                   ("Подключите АКБ" in recent and "АКБ подключён" not in recent))
+        показываем заметную жёлтую плашку. Решаем по САМОМУ СВЕЖЕМУ сигналу:
+        как только пошла работа (АКБ увидели / dshot / ESC) — сразу убираем."""
+        waiting, cur_v = False, None
+        for line in [self.cur_line] + list(reversed(self.log_lines[-8:])):
+            if any(k in line for k in ("АКБ подключён", "начинаю отключение",
+                                       "останавливаю dshot", "запускаю dshot",
+                                       "ESC", "прогресс")):
+                break   # работа уже идёт — ожидания нет
+            if "жду АКБ" in line or "Подключите АКБ" in line:
+                waiting = True
+                m = re.search(r"сейчас:\s*([\d.]+ ?В|нет данных)", line)
+                if m:
+                    cur_v = m.group(1)
+                break
         if waiting and self.proc:
-            cur = ""
-            m = re.search(r"сейчас:\s*([\d.]+ ?В|нет данных)", recent)
-            if m:
-                cur = f"  (сейчас: {m.group(1)})"
-            self.need_lbl.config(
-                text="🔋 ПОДКЛЮЧИТЕ АКБ — жду напряжение ≥ 8 В." + cur)
+            cur = f"  (сейчас: {cur_v})" if cur_v else ""
+            self.need_lbl.config(text="🔋 ПОДКЛЮЧИТЕ АКБ" + cur)
             self.need_lbl.pack(fill="x", pady=(6, 0))
             self.need_btn.pack_forget()   # нажимать не нужно — определится само
             self._battery_shown = True
