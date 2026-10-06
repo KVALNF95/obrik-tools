@@ -394,6 +394,27 @@ def parse_px4_git(fw_path):
         return None
 
 
+def px4_build_hash(fw_path):
+    """Полный git-хэш коммита, из которого собран .px4 (поле git_hash), None."""
+    try:
+        with open(fw_path) as f:
+            return json.load(f).get("git_hash")
+    except Exception:
+        return None
+
+
+def _bootloader_for_target(src, target):
+    """Найти bootloader .bin в boards/<vendor>/<board>/extras по имени таргета.
+    target вида '<vendor>_<board>_<variant>' → boards/<vendor>/<board>/extras."""
+    parts = target.split("_")
+    if len(parts) < 2:
+        return ""
+    vendor, board = parts[0], "_".join(parts[1:-1]) or parts[1]
+    extras = os.path.join(src, "boards", vendor, board, "extras")
+    hits = glob.glob(os.path.join(extras, "*bootloader*.bin"))
+    return hits[0] if hits else ""
+
+
 def _extract_bin_from_px4(px4_path, out_path):
     """.px4 — это JSON с base64+zlib-образом; достать из него .bin для DFU."""
     try:
@@ -465,12 +486,12 @@ def ensure_firmware_fresh(cfg):
     want = git("rev-parse", f"{remote}/{branch}").stdout.strip() \
         if fetched else head
 
-    need_build = not os.path.exists(fw)
+    switched = False
     if cur_branch != branch or (want and head != want):
         if cur_branch != branch:
             print(f"  переключаюсь на ветку {branch} (была {cur_branch})")
         else:
-            print(f"  есть обновления: {head[:9]} → {want[:9]}")
+            print(f"  есть обновления ветки: {head[:9]} → {want[:9]}")
         if git("checkout", "-B", branch, f"{remote}/{branch}").returncode != 0:
             print("  [ОШИБКА] не удалось переключиться на ветку")
             return False
@@ -480,11 +501,25 @@ def ensure_firmware_fresh(cfg):
                timeout=3600).returncode != 0:
             print("  [ОШИБКА] сабмодули не обновились")
             return False
+        head = git("rev-parse", "HEAD").stdout.strip()
+        switched = True
+
+    # пересобирать, если: нет файла / сменили ветку-коммит / собранная
+    # прошивка не из текущего HEAD (осталась от старого билда)
+    built_hash = px4_build_hash(fw) if os.path.exists(fw) else None
+    if not os.path.exists(fw):
         need_build = True
-    elif need_build:
-        print("  исходники актуальны, но собранной прошивки нет — соберу")
+        print("  собранной прошивки нет — соберу")
+    elif switched:
+        need_build = True
+    elif built_hash and head and built_hash != head:
+        need_build = True
+        print(f"  прошивка собрана из {built_hash[:9]}, ветка на {head[:9]} "
+              "— пересоберу")
     else:
-        print(f"  ✓ исходники актуальны ({head[:9]}), пересборка не нужна")
+        need_build = False
+        print(f"  ✓ прошивка актуальна (собрана из {head[:9]}), "
+              "пересборка не нужна")
 
     if need_build:
         print(f"  собираю прошивку: make {target} — при первой сборке "
@@ -510,9 +545,8 @@ def ensure_firmware_fresh(cfg):
     dfu_bin = os.path.join(src, "build", target, f"{target}.dfu.bin")
     if _extract_bin_from_px4(fw, dfu_bin):
         cfg["firmware_bin"] = dfu_bin
-    bl = os.path.join(src, "boards", "matek", "h743-slim", "extras",
-                      "matek_h743-slim_bootloader.bin")
-    if os.path.exists(bl):
+    bl = _bootloader_for_target(src, target)
+    if bl:
         cfg["bootloader"] = bl
     print(f"  использую прошивку из сборки: {fw}")
     return True

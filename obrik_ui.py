@@ -186,12 +186,12 @@ class App:
         self.fc_cb = ttk.Combobox(top, textvariable=self.fc_var,
                                   state="readonly", width=24)
         self.fc_cb.grid(row=0, column=3, padx=6)
-        ttk.Label(top, text="ПО:").grid(row=1, column=0, sticky="w",
-                                        pady=(6, 0))
-        self.soft_var = tk.StringVar()
-        self.soft_cb = ttk.Combobox(top, textvariable=self.soft_var,
-                                    state="readonly", width=24)
-        self.soft_cb.grid(row=1, column=1, padx=(6, 18), pady=(6, 0))
+        # ПО не выбирается руками — оно однозначно определяется платой
+        # (Matek/MicoAir/Holybro → PX4, SpeedyBee → Betaflight).
+        # Показываем его справочно рядом с платой.
+        self.soft_lbl = ttk.Label(top, text="", foreground="#888")
+        self.soft_lbl.grid(row=1, column=2, columnspan=2, sticky="w",
+                           pady=(4, 0))
 
         self.board_lbl = tk.Label(r, text="Плата: …", font=("", 11, "bold"),
                                   bg="#e3e7ea", fg="#666", pady=8)
@@ -258,7 +258,6 @@ class App:
 
         self._fill_selectors()
         self.fc_cb.bind("<<ComboboxSelected>>", self._fc_changed)
-        self.soft_cb.bind("<<ComboboxSelected>>", lambda e: self._validate())
 
     def _fill_selectors(self):
         d_names = [v.get("name", k) for k, v in self.drones.items()]
@@ -299,56 +298,70 @@ class App:
         else:
             row.pack_forget()
 
-    def _fc_changed(self, *_):
-        """Перестроить список ПО под выбранный полётник."""
+    def _current_soft(self):
+        """ПО (стек) для выбранного полётника — определяется однозначно.
+        Приоритет: штатное ПО дрона (если подходит плате), иначе первое ПО,
+        собранное под эту плату. None — для платы нет ПО (напр. SpeedyBee)."""
         fc_id = self._id(self.fcs, self.fc_var.get())
-        fitting = {k: v for k, v in self.softs.items()
-                   if v.get("fc", "") == fc_id}
-        self.soft_cb["values"] = [v.get("name", k)
-                                  for k, v in fitting.items()]
+        fitting = [v for v in self.softs.values() if v.get("fc", "") == fc_id]
         dr = self._sel(self.drones, self.drone_var.get())
         want = dr.get("soft", "") if dr else ""
-        if want in fitting:       # штатное ПО дрона, если подходит
-            self.soft_var.set(fitting[want].get("name", want))
-        elif fitting:
-            self.soft_cb.current(0)
-        else:
-            self.soft_var.set("")
+        if want and want in self.softs and self.softs[want].get("fc") == fc_id:
+            return self.softs[want]
+        return fitting[0] if fitting else None
+
+    def _fc_changed(self, *_):
+        """Плата сменилась — пересчитать ПО (справочно) и перепроверить файлы."""
+        soft = self._current_soft()
+        self.soft_lbl.config(
+            text=f"ПО: {soft.get('name', '?')}" if soft
+            else "ПО: нет (для этой платы стек не заведён)")
         self._validate()
 
     def _validate(self):
-        """Автопроверка: все ли файлы выбранного дрона/полётника на месте."""
+        """Автопроверка готовности: есть ли ПО для платы, исходники/файлы
+        прошивки и файл параметров дрона."""
         import shutil
         probs = []
         if not shutil.which("dfu-util"):
             probs.append("не установлен dfu-util")
 
-        def chk(label, p):
-            if not p:
-                probs.append(f"{label} не задан в drones.cfg")
-                return
+        def exists(p):
+            p = os.path.expanduser(p)
             full = p if os.path.isabs(p) else os.path.join(HERE, p)
-            if not os.path.exists(full):
-                probs.append(f"{label}: нет файла {p}")
+            return os.path.exists(full)
 
-        soft = self._sel(self.softs, self.soft_var.get())
+        soft = self._current_soft()
         dr = self._sel(self.drones, self.drone_var.get())
-        if soft:
-            chk("загрузчик", soft.get("bootloader", ""))
-            chk("прошивка", soft.get("firmware", ""))
-            chk("прошивка (.bin)", soft.get("firmware_bin", ""))
+        if soft is None:
+            probs.append("для этой платы нет ПО (напр. Betaflight не заведён)")
+        elif soft.get("px4_src"):
+            # прошивка собирается из исходников — файлы появятся при сборке;
+            # достаточно, чтобы исходники были на месте
+            if not exists(os.path.join(soft["px4_src"], ".git")):
+                probs.append(f"нет исходников PX4: {soft['px4_src']}")
         else:
-            probs.append("для этого полётника нет ПО в drones.cfg")
+            for label, key in (("загрузчик", "bootloader"),
+                               ("прошивка", "firmware"),
+                               ("прошивка (.bin)", "firmware_bin")):
+                p = soft.get(key, "")
+                if not p or not exists(p):
+                    probs.append(f"{label}: нет файла {p or '—'}")
         if dr:
-            chk("параметры", dr.get("params_file", ""))
+            pf = dr.get("params_file", "")
+            if not pf or not exists(pf):
+                probs.append(f"параметры: нет файла {pf or '—'}")
+
         self.files_ok = not probs
         if probs:
-            self.check_lbl.config(text="⚠ " + "; ".join(probs),
-                                  fg="#aa3333")
-        else:
+            self.check_lbl.config(text="⚠ " + "; ".join(probs), fg="#aa3333")
+        elif soft and soft.get("px4_src"):
             self.check_lbl.config(
-                text="✓ Файлы прошивки и параметров на месте",
+                text="✓ Готово (прошивка соберётся из исходников)",
                 fg="#1d6b32")
+        else:
+            self.check_lbl.config(text="✓ Файлы прошивки и параметров на месте",
+                                  fg="#1d6b32")
         if not self.proc:
             self.full_btn.config(
                 state="normal" if self.files_ok else "disabled")
@@ -387,7 +400,7 @@ class App:
         if dry:
             cmd += ["--dry-run"]
         dr = self._sel(self.drones, self.drone_var.get())
-        soft = self._sel(self.softs, self.soft_var.get())
+        soft = self._current_soft()
         if dr and soft:
             cmd += ["--config", build_cfg(dr, soft)]
         try:
@@ -433,7 +446,7 @@ class App:
 
     def _set_running(self, running):
         self.full_btn.config(state="disabled" if running else "normal")
-        for cb in (self.drone_cb, self.fc_cb, self.soft_cb):
+        for cb in (self.drone_cb, self.fc_cb):
             cb.config(state="disabled" if running else "readonly")
         self.abort_btn.config(state="normal" if running else "disabled")
         if not running:
