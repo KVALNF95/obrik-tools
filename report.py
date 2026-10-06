@@ -18,8 +18,10 @@
 """
 import json
 import os
+import smtplib
 import ssl
 import urllib.request
+from email.message import EmailMessage
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPORT_CFG = os.path.join(HERE, "report.cfg")
@@ -74,6 +76,38 @@ def send_report(text):
             ok = 200 <= status < 300
             return ok, ("Отчёт отправлен." if ok
                         else f"Вебхук вернул код {status}.")
+        if method == "email":
+            return _send_email(cfg, text)
         return False, f"Неизвестный method в report.cfg: {method}"
     except Exception as e:
         return False, f"Не удалось отправить: {e}"
+
+
+def _send_email(cfg, text):
+    host = cfg.get("smtp_host")
+    port = int(cfg.get("smtp_port", "465"))
+    user = cfg.get("smtp_user")
+    pw = cfg.get("smtp_pass")
+    to = cfg.get("mail_to") or user
+    frm = cfg.get("mail_from") or user
+    if not host or not user or not pw:
+        return False, "В report.cfg нет smtp_host/smtp_user/smtp_pass."
+    msg = EmailMessage()
+    msg["Subject"] = "Sverk Tools — отчёт о проблеме"
+    msg["From"] = frm
+    msg["To"] = to
+    msg.set_content(text)
+    ctx = ssl.create_default_context()
+    try:
+        if port == 465:   # SSL
+            with smtplib.SMTP_SSL(host, port, timeout=20, context=ctx) as s:
+                s.login(user, pw)
+                s.send_message(msg)
+        else:             # STARTTLS (587)
+            with smtplib.SMTP(host, port, timeout=20) as s:
+                s.starttls(context=ctx)
+                s.login(user, pw)
+                s.send_message(msg)
+        return True, f"Отчёт отправлен на {to}."
+    except Exception as e:
+        return False, f"Почта не отправилась: {e}"

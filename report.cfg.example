@@ -10,6 +10,19 @@ method   = telegram
 tg_token = 123456789:AbCdEf...ваш_токен
 tg_chat  = 111222333
 
-# ── Вариант 2: произвольный вебхук (POST JSON {"text": "..."}) ──
+# ── Вариант 2: электронная почта (SMTP, работает без VPN) ──
+# Рекомендуется Яндекс или Mail.ru — доступны из РФ без VPN.
+# Нужен «пароль приложения» (не обычный пароль от почты):
+#   Яндекс:  id.yandex.ru → Безопасность → Пароли приложений → Почта
+#   Mail.ru: id.mail.ru → Безопасность → Пароли для внешних приложений
+# method    = email
+# smtp_host = smtp.yandex.ru
+# smtp_port = 465
+# smtp_user = your_login@yandex.ru
+# smtp_pass = пароль_приложения
+# mail_to   = kuznetsovvova95@gmail.com    # куда слать отчёты
+# mail_from = your_login@yandex.ru
+
+# ── Вариант 3: произвольный вебхук (POST JSON {"text": "..."}) ──
 # method      = webhook
 # webhook_url = https://example.com/your-hook
