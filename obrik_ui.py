@@ -470,10 +470,18 @@ class App:
                  text="Опишите, что случилось — что делали и что пошло не так.\n"
                       "К сообщению автоматически приложится журнал последнего "
                       "запуска.", padx=12, pady=10).pack(fill="x")
-        txt = tk.Text(win, width=70, height=10, wrap="word",
-                      font=("", 11))
-        txt.pack(fill="both", expand=True, padx=12)
+        trow = ttk.Frame(win)
+        trow.pack(fill="x", padx=12)
+        ttk.Label(trow, text="Кратко:").pack(side="left")
+        title_var = tk.StringVar()
+        ttk.Entry(trow, textvariable=title_var).pack(side="left", fill="x",
+                                                     expand=True, padx=(6, 0))
+        txt = tk.Text(win, width=70, height=10, wrap="word", font=("", 11))
+        txt.pack(fill="both", expand=True, padx=12, pady=(6, 0))
         txt.focus_set()
+        urgent = tk.BooleanVar(value=False)
+        ttk.Checkbutton(win, text="Срочно (придёт даже в тихие часы)",
+                        variable=urgent).pack(anchor="w", padx=12, pady=(4, 0))
         status = tk.Label(win, text="", bg="#f4f7f9", anchor="w", padx=12)
         status.pack(fill="x")
 
@@ -485,9 +493,12 @@ class App:
             if send_report is None:
                 status.config(text="Модуль отправки недоступен.", fg="#aa3333")
                 return
+            title = title_var.get().strip() or \
+                f"Проблема: {self.drone_var.get()}"
             status.config(text="Отправляю…", fg="#555")
             win.update_idletasks()
-            ok, info = send_report(self._build_report(msg))
+            ok, info = send_report(self._build_report(msg), title=title,
+                                   level="error" if urgent.get() else "warn")
             status.config(text=info, fg="#1d6b32" if ok else "#aa3333")
             if ok:
                 win.after(1200, win.destroy)

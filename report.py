@@ -50,14 +50,31 @@ def _post(url, data, timeout=15, headers=None):
         return r.status, r.read().decode("utf-8", "replace")
 
 
-def send_report(text):
-    """Отправить текст отчёта. Вернуть (ok, сообщение-для-пользователя)."""
+def send_report(text, title=None, level="warn", key=None, source="sverk-tools"):
+    """Отправить отчёт. Вернуть (ok, сообщение-для-пользователя).
+    title — краткий заголовок (для сервера отчётов обязателен); level: info|warn|error."""
     cfg = load_report_cfg()
     method = cfg.get("method", "").lower()
     if not method:
         return False, ("Отправка не настроена. Заполните report.cfg "
                        "(см. report.cfg.example).")
     try:
+        if method == "reports":
+            url = cfg.get("report_url")
+            token = cfg.get("report_token")
+            if not url or not token:
+                return False, "В report.cfg нет report_url или report_token."
+            if not title:
+                title = (text.strip().splitlines() or ["Отчёт"])[0][:80]
+            payload = {"title": title, "text": text, "level": level,
+                       "source": source}
+            if key:
+                payload["key"] = key
+            status, body = _post(url, payload,
+                                 headers={"X-Report-Token": token})
+            ok = 200 <= status < 300
+            return ok, ("Отчёт отправлен." if ok
+                        else f"Сервер отчётов вернул код {status}: {body[:160]}")
         if method == "telegram":
             token, chat = cfg.get("tg_token"), cfg.get("tg_chat")
             if not token or not chat:
