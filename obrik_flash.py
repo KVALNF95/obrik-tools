@@ -1225,6 +1225,8 @@ def step_beacon_delay(cfg):
             time.sleep(1)
         if not esc_done[esc]:
             print(f"  ✗ ESC {esc} — не удалось записать (проверьте АКБ и повторите)")
+        # прогресс для UI: сколько ESC обработано из общего числа
+        print(f"  прогресс ESC: {esc + 1}/{num}")
 
     print("  запускаю dshot...")
     nsh_send(m, "dshot start", timeout_s=2)
