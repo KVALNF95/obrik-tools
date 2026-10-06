@@ -1,0 +1,15 @@
+# Настройка отправки отчётов о проблемах (кнопка «Сообщить о проблеме»).
+# Скопируйте этот файл в report.cfg и заполните. report.cfg в git НЕ попадает.
+
+# ── Вариант 1: Telegram ──
+# 1. Создайте бота: напишите @BotFather → /newbot → получите токен.
+# 2. Напишите своему боту любое сообщение.
+# 3. Узнайте свой chat_id: откройте
+#    https://api.telegram.org/bot<ТОКЕН>/getUpdates и найдите "chat":{"id":...}.
+method   = telegram
+tg_token = 123456789:AbCdEf...ваш_токен
+tg_chat  = 111222333
+
+# ── Вариант 2: произвольный вебхук (POST JSON {"text": "..."}) ──
+# method      = webhook
+# webhook_url = https://example.com/your-hook

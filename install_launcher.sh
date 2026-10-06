@@ -29,14 +29,9 @@ desktop_entry > "$APPS/sverk-tools.desktop"
 chmod +x "$APPS/sverk-tools.desktop"
 update-desktop-database "$APPS" 2>/dev/null || true
 
-# 2) на рабочий стол (чтобы была иконка как у приложения)
+# 2) убрать старый ярлык с рабочего стола (если остался от прежних версий)
 DESK="$(xdg-user-dir DESKTOP 2>/dev/null || echo "$HOME/Desktop")"
-if [ -d "$DESK" ]; then
-    desktop_entry > "$DESK/sverk-tools.desktop"
-    chmod +x "$DESK/sverk-tools.desktop"
-    # GNOME требует пометить ярлык «доверенным»
-    gio set "$DESK/sverk-tools.desktop" metadata::trusted true 2>/dev/null || true
-fi
+rm -f "$DESK/sverk-tools.desktop" 2>/dev/null || true
 
 # 3) закрепить на панели (GNOME dash → favorite-apps)
 if command -v gsettings >/dev/null 2>&1; then

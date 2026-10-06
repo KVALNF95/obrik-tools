@@ -36,6 +36,12 @@ FLASH_SCRIPT = os.path.join(HERE, "obrik_flash.py")
 DRONES_CFG = os.path.join(HERE, "drones.cfg")
 BASE_CFG = os.path.join(HERE, "obrik_flash.cfg")
 
+sys.path.insert(0, HERE)
+try:
+    from report import send_report
+except Exception:
+    send_report = None
+
 ACCENT = "#05b9f0"
 STEPS = {1: "Загрузчик (DFU)", 2: "Прошивка PX4",
          3: "Параметры", 4: "Beacon (писк ESC)"}
@@ -264,12 +270,16 @@ class App:
         self.need_btn = ttk.Button(st, text="Готово — продолжить",
                                    command=lambda: self.send_stdin("\n"))
 
-        # сворачиваемые подробности
+        # сворачиваемые подробности + кнопка отчёта о проблеме
         bot = ttk.Frame(r, padding=(12, 8, 12, 10))
         bot.pack(fill="both", expand=True)
-        self.details_btn = ttk.Button(bot, text="Подробности ▸",
+        row = ttk.Frame(bot)
+        row.pack(fill="x")
+        self.details_btn = ttk.Button(row, text="Подробности ▸",
                                       command=self.toggle_details)
-        self.details_btn.pack(anchor="w")
+        self.details_btn.pack(side="left")
+        ttk.Button(row, text="⚠ Сообщить о проблеме",
+                   command=self.report_problem).pack(side="right")
         self.log_text = tk.Text(bot, height=10, bg="#14191e", fg="#e4e6e7",
                                 font=("monospace", 9), state="disabled",
                                 wrap="word")
@@ -407,6 +417,68 @@ class App:
         else:
             self.log_text.pack_forget()
             self.details_btn.config(text="Подробности ▸")
+
+    # ── отчёт о проблеме ─────────────────────────────────────────
+
+    def report_problem(self):
+        """Окно: пользователь пишет, что случилось; отправляем владельцу
+        вместе с хвостом лога и контекстом (дрон/плата)."""
+        win = tk.Toplevel(self.root)
+        win.title("Сообщить о проблеме")
+        win.configure(bg="#f4f7f9")
+        win.transient(self.root)
+        win.grab_set()
+        tk.Label(win, bg="#f4f7f9", justify="left", anchor="w",
+                 text="Опишите, что случилось — что делали и что пошло не так.\n"
+                      "К сообщению автоматически приложится журнал последнего "
+                      "запуска.", padx=12, pady=10).pack(fill="x")
+        txt = tk.Text(win, width=70, height=10, wrap="word",
+                      font=("", 11))
+        txt.pack(fill="both", expand=True, padx=12)
+        txt.focus_set()
+        status = tk.Label(win, text="", bg="#f4f7f9", anchor="w", padx=12)
+        status.pack(fill="x")
+
+        def do_send():
+            msg = txt.get("1.0", "end").strip()
+            if not msg:
+                status.config(text="Напишите хотя бы пару слов.", fg="#aa3333")
+                return
+            if send_report is None:
+                status.config(text="Модуль отправки недоступен.", fg="#aa3333")
+                return
+            status.config(text="Отправляю…", fg="#555")
+            win.update_idletasks()
+            ok, info = send_report(self._build_report(msg))
+            status.config(text=info, fg="#1d6b32" if ok else "#aa3333")
+            if ok:
+                win.after(1200, win.destroy)
+
+        bar = ttk.Frame(win)
+        bar.pack(fill="x", padx=12, pady=10)
+        ttk.Button(bar, text="Отправить", command=do_send).pack(side="right")
+        ttk.Button(bar, text="Отмена",
+                   command=win.destroy).pack(side="right", padx=6)
+
+    def _build_report(self, msg):
+        """Собрать текст отчёта: сообщение + контекст + хвост лога."""
+        dr = self.drone_var.get()
+        fc = self.fc_var.get()
+        log_tail = ""
+        try:
+            with open("/tmp/obrik_ui_last.log", encoding="utf-8") as f:
+                log_tail = "".join(f.readlines()[-60:])
+        except OSError:
+            log_tail = "(журнала последнего запуска нет)"
+        host = ""
+        try:
+            host = os.uname().nodename
+        except Exception:
+            pass
+        return (f"🛠 Sverk Tools — отчёт о проблеме\n"
+                f"Дрон: {dr} | Плата: {fc} | Хост: {host}\n"
+                f"\nСообщение:\n{msg}\n"
+                f"\n— журнал последнего запуска —\n{log_tail}")
 
     # ── запуск/остановка ─────────────────────────────────────────
 
