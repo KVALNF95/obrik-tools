@@ -148,7 +148,7 @@ def classify_prompt(tail, context):
 class App:
     def __init__(self, root):
         self.root = root
-        root.title("Obrik Tools — прошивка полётника")
+        root.title("Sverk Tools — прошивка дронов")
         root.minsize(620, 480)
 
         self.proc = None
@@ -188,7 +188,7 @@ class App:
                     background="#3bb24a", lightcolor="#3bb24a",
                     darkcolor="#3bb24a", thickness=18)
 
-        ttk.Label(r, text="Obrik Tools — прошивка полётника",
+        ttk.Label(r, text="Sverk Tools — прошивка дронов",
                   style="Head.TLabel", anchor="w").pack(fill="x")
 
         top = ttk.Frame(r, padding=(12, 10, 12, 0))
@@ -508,14 +508,17 @@ class App:
                 exited = item[1]
             else:
                 self._consume_text(item)
+        # прогресс считаем ДО строки статуса, иначе проценты отстают на шаг
+        if self.proc:
+            self.progress["value"] = self._progress_value()
         if drained:
             self._refresh_steps()
             self._refresh_action()
-        if self.proc:
-            self.progress["value"] = self._progress_value()
         if exited is not None:
             self._finished(exited)
         self._check_prompt()
+        if not self.prompt_key:          # нет stdin-паузы — проверить АКБ
+            self._battery_notice()
         self.root.after(150, self._tick)
 
     def _consume_text(self, text):
@@ -581,6 +584,26 @@ class App:
             "none": ("Плата: не подключена", "#e3e7ea", "#666666"),
         }[self.board]
         self.board_lbl.config(text=txt, bg=bg, fg=fg)
+
+    def _battery_notice(self):
+        """Ожидание АКБ идёт без stdin-паузы (скрипт сам ловит напряжение) —
+        поэтому показываем заметную жёлтую плашку, пока плата не увидит ≥8 В."""
+        recent = "\n".join(self.log_lines[-5:] + [self.cur_line])
+        waiting = ("жду АКБ" in recent or
+                   ("Подключите АКБ" in recent and "АКБ подключён" not in recent))
+        if waiting and self.proc:
+            cur = ""
+            m = re.search(r"сейчас:\s*([\d.]+ ?В|нет данных)", recent)
+            if m:
+                cur = f"  (сейчас: {m.group(1)})"
+            self.need_lbl.config(
+                text="🔋 ПОДКЛЮЧИТЕ АКБ — жду напряжение ≥ 8 В." + cur)
+            self.need_lbl.pack(fill="x", pady=(6, 0))
+            self.need_btn.pack_forget()   # нажимать не нужно — определится само
+            self._battery_shown = True
+        elif getattr(self, "_battery_shown", False):
+            self.need_lbl.pack_forget()
+            self._battery_shown = False
 
     def _refresh_steps(self):
         for n, (row, badge) in self.step_rows.items():
