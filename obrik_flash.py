@@ -570,6 +570,43 @@ def _git_candidates(ver):
     return [c for c in out if c]
 
 
+def connected_usb_ids():
+    """Список VID:PID подключённых USB-устройств (из lsusb), в нижнем регистре."""
+    try:
+        out = subprocess.run(["lsusb"], capture_output=True, text=True,
+                             timeout=3).stdout
+    except Exception:
+        return []
+    return [m.lower() for m in re.findall(r"ID ([0-9a-fA-F]{4}:[0-9a-fA-F]{4})",
+                                          out)]
+
+
+def check_board_matches(cfg):
+    """Сверить подключённую плату с выбранной по usb_id.
+    Возвращает (ok, сообщение). ok=False — явное несовпадение (узнали плату,
+    и это не та, что выбрана). ok=True — совпало или определить нельзя."""
+    expected = (cfg.get("expected_usb_id") or "").strip().lower()
+    # карта «pid → имя» всех известных плат
+    known = {}
+    for item in (cfg.get("known_usb_ids") or "").split(";"):
+        if "=" in item:
+            pid, name = item.split("=", 1)
+            known[pid.strip().lower()] = name.strip()
+    present = connected_usb_ids()
+    # какую известную плату реально видим?
+    seen = [(pid, known[pid]) for pid in present if pid in known]
+    if not seen:
+        return True, ""        # подключённую плату не опознали — не мешаем
+    expected_set = {e.strip() for e in expected.split(",") if e.strip()}
+    for pid, name in seen:
+        if expected_set and pid in expected_set:
+            return True, ""    # нашли ровно ожидаемую — всё хорошо
+    pid, name = seen[0]
+    want = cfg.get("expected_fc_name", "выбранная плата")
+    return False, (f"Подключена плата «{name}», а выбрана «{want}». "
+                   f"Прошивка не подойдёт.")
+
+
 def probe_running_px4(cfg, fw_path):
     """Опрос запущенной платы БЕЗ захода в DFU. Возвращает:
       'same'    — на плате PX4 и git-хэш совпал с нашим образом;
@@ -869,6 +906,18 @@ def step_flash_bootloader(cfg):
         input("  Нажмите Enter, когда плата подключена...")
         time.sleep(1.5)   # дать плате время загрузиться/определиться
         state = detect_board_state()
+
+    # сверка: та ли плата подключена, что выбрана (по usb_id)
+    ok_board, msg = check_board_matches(cfg)
+    if not ok_board:
+        print(f"  ⚠ {msg}")
+        try:
+            ans = input("  Всё равно продолжить? [y/N]: ").strip().lower()
+        except EOFError:
+            ans = ""
+        if ans not in ("y", "yes", "д", "да"):
+            print("  Прошивка отменена — выберите правильную плату.")
+            return False
 
     if state == "running":
         # плата запущена: если на ней PX4 — загрузчик исправен (плата же

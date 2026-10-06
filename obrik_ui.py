@@ -73,8 +73,9 @@ def load_drones():
     return drones, fcs, softs
 
 
-def build_cfg(drone, soft):
-    """Временный конфиг: базовый + params дрона + файлы выбранного ПО."""
+def build_cfg(drone, soft, fc=None, all_fcs=None):
+    """Временный конфиг: базовый + params дрона + файлы выбранного ПО +
+    данные для сверки подключённой платы (usb_id)."""
     overridden = {"bootloader", "firmware", "firmware_bin", "params_file"}
     lines = []
     if os.path.exists(BASE_CFG):
@@ -96,6 +97,16 @@ def build_cfg(drone, soft):
     for k in ("px4_src", "px4_repo", "px4_branch", "px4_target"):
         if soft.get(k):
             lines.append(f"{k} = {soft[k]}")
+    # сверка платы: что выбрано и карта «usb_id → имя платы» всех плат
+    if fc:
+        lines.append(f"expected_fc_name = {fc.get('name', '')}")
+        if fc.get("usb_id"):
+            lines.append(f"expected_usb_id = {fc['usb_id']}")
+    if all_fcs:
+        known = [f"{v['usb_id']}={v.get('name', k)}"
+                 for k, v in all_fcs.items() if v.get("usb_id")]
+        if known:
+            lines.append(f"known_usb_ids = {';'.join(known)}")
     path = os.path.join(tempfile.gettempdir(), "obrik_ui_run.cfg")
     with open(path, "w", encoding="utf-8") as f:
         f.write("\n".join(lines) + "\n")
@@ -105,10 +116,16 @@ def build_cfg(drone, soft):
 # ── классификация пауз скрипта ───────────────────────────────────────
 
 def classify_prompt(tail, context):
-    """Что скрипт ждёт: ('yn'|'akb'|'dfu'|'running'|'manual', понятный текст)."""
+    """Что скрипт ждёт: ('yn'|'mismatch'|'akb'|'dfu'|'running'|'plug'|'replug'
+    |'manual', понятный текст)."""
+    ctx = context + "\n" + tail
+    if tail.endswith("[y/N]:") or "Подключена плата" in ctx or "а выбрана" in ctx:
+        warn = next((l.strip() for l in reversed(context.splitlines())
+                     if "Подключена плата" in l or "а выбрана" in l),
+                    "Подключена не та плата, что выбрана.")
+        return "mismatch", warn.lstrip("⚠ ").strip()
     if tail.endswith("[Y/n]:"):
         return "yn", "Шаг завершился с ошибкой."
-    ctx = context + "\n" + tail
     if "АКБ" in ctx:
         return "akb", "Подключите АКБ (регуляторы должны получить питание)."
     if "когда плата подключена" in tail or "зажимать НЕ нужно" in ctx:
@@ -239,9 +256,11 @@ class App:
         self.action_lbl.pack(fill="x")
         self.progress = ttk.Progressbar(st, mode="determinate", maximum=100,
                                         style="Green.Horizontal.TProgressbar")
-        self.need_lbl = tk.Label(st, text="", bg="#fff3cd", fg="#7a5b00",
-                                 anchor="w", justify="left", padx=10, pady=8,
-                                 font=("", 10, "bold"), wraplength=560)
+        # подсказка о действии — крупно и жёлтым, чтобы сразу бросалась в глаза
+        self.need_lbl = tk.Label(st, text="", bg="#ffe169", fg="#5a4500",
+                                 anchor="w", justify="left", padx=14, pady=14,
+                                 font=("", 14, "bold"), wraplength=560,
+                                 bd=2, relief="solid")
         self.need_btn = ttk.Button(st, text="Готово — продолжить",
                                    command=lambda: self.send_stdin("\n"))
 
@@ -401,8 +420,9 @@ class App:
             cmd += ["--dry-run"]
         dr = self._sel(self.drones, self.drone_var.get())
         soft = self._current_soft()
+        fc = self._sel(self.fcs, self.fc_var.get())
         if dr and soft:
-            cmd += ["--config", build_cfg(dr, soft)]
+            cmd += ["--config", build_cfg(dr, soft, fc, self.fcs)]
         try:
             self.proc = subprocess.Popen(
                 cmd, cwd=HERE, stdin=subprocess.PIPE,
@@ -635,7 +655,8 @@ class App:
         if not self.proc:
             return
         tail = self.cur_line.strip()
-        waiting = "Enter" in tail or tail.endswith("[Y/n]:")
+        waiting = "Enter" in tail or tail.endswith("[Y/n]:") \
+            or tail.endswith("[y/N]:")
         if not waiting:
             self.answered_key = None   # скрипт что-то напечатал — пауза ушла
             if self.prompt_key:
@@ -660,6 +681,14 @@ class App:
                     "Шаг завершился с ошибкой.\nПродолжить со "
                     "следующими шагами?")
                 self.send_stdin("\n" if cont else "n\n")
+                return
+            if self.prompt_kind == "mismatch" and not self.asked:
+                self.asked = True
+                cont = messagebox.askyesno(
+                    "Не та плата",
+                    human + "\n\nВсё равно прошивать?", default="no",
+                    icon="warning")
+                self.send_stdin("y\n" if cont else "n\n")
                 return
         # для «переткните» ждём, пока плата сначала пропадёт, потом вернётся
         if self.prompt_kind == "replug":
