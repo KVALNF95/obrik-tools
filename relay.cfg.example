@@ -5,13 +5,20 @@
 # Сгенерировать:  python3 -c "import secrets; print(secrets.token_urlsafe(32))"
 token     = СГЕНЕРИРУЙТЕ_ДЛИННУЮ_СЛУЧАЙНУЮ_СТРОКУ
 
-# почта для пересылки отчётов (секреты живут здесь, на сервере)
-smtp_host = smtp.yandex.ru
-smtp_port = 465
-smtp_user = sender@yandex.ru
-smtp_pass = пароль_приложения_отправителя
-mail_to   = kuznetsovvova95@gmail.com
-mail_from = sender@yandex.ru
+# ── Куда пересылать отчёты (секреты живут здесь, на сервере) ──
+# Вариант A: Telegram (сервер должен доставать api.telegram.org)
+method   = telegram
+tg_token = 123456789:AbC...токен_бота
+tg_chat  = 111222333
+
+# Вариант B: почта (SMTP)
+# method    = email
+# smtp_host = smtp.yandex.ru
+# smtp_port = 465
+# smtp_user = sender@yandex.ru
+# smtp_pass = пароль_приложения_отправителя
+# mail_to   = kuznetsovvova95@gmail.com
+# mail_from = sender@yandex.ru
 
 # где слушать
 bind = 0.0.0.0

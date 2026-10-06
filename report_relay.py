@@ -26,6 +26,7 @@ import json
 import os
 import smtplib
 import ssl
+import urllib.request
 from email.message import EmailMessage
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -42,6 +43,29 @@ def load_cfg():
                 k, v = line.split("=", 1)
                 cfg[k.strip()] = v.strip()
     return cfg
+
+
+def deliver(cfg, text):
+    """Переслать текст отчёта выбранным способом: telegram или email."""
+    method = cfg.get("method", "email").lower()
+    if method == "telegram":
+        send_telegram(cfg, text)
+    else:
+        send_mail(cfg, text)
+
+
+def send_telegram(cfg, text):
+    token, chat = cfg["tg_token"], cfg["tg_chat"]
+    data = json.dumps({"chat_id": chat, "text": text[:4000],
+                       "disable_web_page_preview": True}).encode()
+    req = urllib.request.Request(
+        f"https://api.telegram.org/bot{token}/sendMessage",
+        data=data, headers={"Content-Type": "application/json"})
+    ctx = ssl.create_default_context()
+    with urllib.request.urlopen(req, timeout=20, context=ctx) as r:
+        body = r.read().decode("utf-8", "replace")
+        if '"ok":true' not in body:
+            raise RuntimeError(f"telegram: {body[:200]}")
 
 
 def send_mail(cfg, text):
@@ -89,9 +113,9 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as e:
             return self._reply(400, f"bad body: {e}")
         try:
-            send_mail(cfg, text)
+            deliver(cfg, text)
         except Exception as e:
-            return self._reply(502, f"mail failed: {e}")
+            return self._reply(502, f"delivery failed: {e}")
         return self._reply(200, "ok")
 
 
