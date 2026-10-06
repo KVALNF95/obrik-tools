@@ -587,18 +587,24 @@ class App:
             badge.config(text=BADGE.get(self.steps_state.get(n), "▫"))
 
     def _progress_value(self):
-        """Заполнение бара в пределах ТЕКУЩЕГО шага (0–100%). На каждый новый
-        шаг бар начинается заново; завершённый шаг кратко показывается полным."""
-        # процент внутри шага — из последней строки (%, либо N/M)
-        line = self.cur_line
-        mp = re.search(r"(\d+(?:\.\d+)?)\s*%", line)
-        mr = re.search(r"(\d+)\s*/\s*(\d+)", line)
-        if mp:
-            frac = min(1.0, float(mp.group(1)) / 100)
-        elif mr and int(mr.group(2)) > 0:
-            frac = min(1.0, int(mr.group(1)) / int(mr.group(2)))
-        else:
-            frac = self._step_frac   # нет числа в строке — держим прежнее
+        """Заполнение бара в пределах ТЕКУЩЕГО шага (0–100%). Прогресс-строки
+        (N/M, проценты) приходят как завершённые строки, поэтому ищем самую
+        свежую среди cur_line и последних строк лога — не заглядывая в
+        предыдущий шаг (до ближайшего заголовка «ШАГ N»)."""
+        frac = None
+        for line in [self.cur_line] + list(reversed(self.log_lines[-20:])):
+            if re.search(r"ШАГ \d", line):
+                break   # дальше — уже предыдущий шаг
+            mp = re.search(r"(\d+(?:\.\d+)?)\s*%", line)
+            mr = re.search(r"(\d+)\s*/\s*(\d+)", line)
+            if mp:
+                frac = min(1.0, float(mp.group(1)) / 100)
+                break
+            if mr and int(mr.group(2)) > 0:
+                frac = min(1.0, int(mr.group(1)) / int(mr.group(2)))
+                break
+        if frac is None:
+            frac = self._step_frac   # свежего числа нет — держим прежнее
         self._step_frac = frac
         return frac * 100
 
